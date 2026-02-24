@@ -1,4 +1,4 @@
-import { supabase } from "./supabase"
+import { supabaseAdmin as supabase } from "./supabase"
 
 export type Player = {
     id: string
@@ -19,13 +19,8 @@ export type Room = {
     lastActive: number // To track idle rooms
 }
 
-const globalRooms = globalThis as unknown as {
-    bingoRooms: Record<string, Room>
-}
-
-if (!globalRooms.bingoRooms) globalRooms.bingoRooms = {}
-
-export const rooms = globalRooms.bingoRooms
+// Removed globalThis in-memory state
+// We now rely solely on Supabase Postgres
 
 // Helper: Generate a random Bingo board (1-25 shuffled) or empty
 export function generateBoard(empty: boolean = false): number[] {
@@ -61,12 +56,25 @@ export function checkBoardWin(board: number[], calledNumbers: number[]): boolean
 }
 
 
-// Helper: Increment version
+// Helper: Increment version and Save to Supabase
 export async function updateRoom(room: Room): Promise<Room> {
     room.version = (room.version || 0) + 1
     room.lastActive = Date.now()
 
-    // Broadcast update event via Supabase Realtime
+    // 1. Save state to Supabase Postgres
+    const { error } = await supabase
+        .from('rooms')
+        .upsert({
+            id: room.id,
+            data: room,
+            last_active: room.lastActive
+        })
+
+    if (error) {
+        console.error("Error saving room to Supabase:", error)
+    }
+
+    // 2. Broadcast update event via Supabase Realtime
     const channel = supabase.channel(`room-${room.id}`)
 
     return new Promise((resolve) => {

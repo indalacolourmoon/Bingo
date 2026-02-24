@@ -1,11 +1,12 @@
 'use server'
 import { revalidatePath } from "next/cache"
-import { rooms, updateRoom, generateBoard, checkBoardWin } from "@/lib/bingo"
+import { updateRoom, generateBoard, checkBoardWin, Room } from "@/lib/bingo"
+import { supabaseAdmin as supabase } from "@/lib/supabase"
 
 export async function createRoom(playerName: string) {
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
     const playerId = Math.random().toString(36).substring(7)
-    rooms[roomId] = {
+    const room: Room = {
         id: roomId,
         list: [],
         currentPlayerIndex: 0,
@@ -20,12 +21,16 @@ export async function createRoom(playerName: string) {
         version: 1,
         lastActive: Date.now()
     }
+    await updateRoom(room)
+
     return { roomId, playerId }
 }
 
 export async function joinRoom(roomId: string, playerName: string) {
-    const room = rooms[roomId]
-    if (!room) return { error: "Room not found" }
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return { error: "Room not found" }
+
+    const room = dbRoom.data as Room
     if (room.status !== 'waiting') return { error: "Game already started or full" }
     if (room.players.length >= 2) return { error: "Room full" }
 
@@ -47,8 +52,10 @@ export async function joinRoom(roomId: string, playerName: string) {
 }
 
 export async function fetchRoom(roomId: string) {
-    const room = rooms[roomId]
-    if (!room) return null
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return null
+
+    const room = dbRoom.data as Room
 
     // Lazy state transition
     if (room.status === 'starting' && room.startTime) {
@@ -63,8 +70,11 @@ export async function fetchRoom(roomId: string) {
 }
 
 export async function updateBoard(roomId: string, playerId: string, newBoard: number[]) {
-    const room = rooms[roomId]
-    if (!room || room.status !== 'setup') return
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return
+
+    const room = dbRoom.data as Room
+    if (room.status !== 'setup') return
 
     const player = room.players.find(p => p.id === playerId)
     if (!player) return
@@ -79,8 +89,11 @@ export async function updateBoard(roomId: string, playerId: string, newBoard: nu
 }
 
 export async function toggleReady(roomId: string, playerId: string, currentBoard?: number[]) {
-    const room = rooms[roomId]
-    if (!room || room.status !== 'setup') return
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return
+
+    const room = dbRoom.data as Room
+    if (room.status !== 'setup') return
 
     const player = room.players.find(p => p.id === playerId)
     if (!player) return
@@ -105,8 +118,11 @@ export async function toggleReady(roomId: string, playerId: string, currentBoard
 }
 
 export async function callNumber(roomId: string, number: number) {
-    const room = rooms[roomId]
-    if (!room || room.status !== 'playing') return
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return
+
+    const room = dbRoom.data as Room
+    if (room.status !== 'playing') return
 
     if (room.list.includes(number)) return
 
@@ -127,8 +143,9 @@ export async function callNumber(roomId: string, number: number) {
 }
 
 export async function restartGame(roomId: string) {
-    const room = rooms[roomId]
-    if (room) {
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (dbRoom) {
+        const room = dbRoom.data as Room
         room.list = []
         room.winner = null
         room.status = 'setup'
@@ -144,9 +161,12 @@ export async function restartGame(roomId: string) {
 }
 
 export async function handlePlayerDisconnect(roomId: string, playerId: string) {
-    const room = rooms[roomId]
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return
+
+    const room = dbRoom.data as Room
     // If room doesn't exist or is already closed, we don't care.
-    if (!room || room.status === 'closed') return
+    if (room.status === 'closed') return
 
     const playerExists = room.players.find(p => p.id === playerId)
     if (playerExists) {
@@ -157,16 +177,16 @@ export async function handlePlayerDisconnect(roomId: string, playerId: string) {
             // No players left -> Close and delete
             room.status = 'closed'
             await updateRoom(room)
-            setTimeout(() => {
-                delete rooms[roomId]
+            setTimeout(async () => {
+                await supabase.from('rooms').delete().eq('id', roomId)
             }, 5000)
         } else {
             if (room.status === 'playing' || room.status === 'starting' || room.status === 'finished') {
                 // If the game started, opponent leaving closes the room
                 room.status = 'closed'
                 await updateRoom(room)
-                setTimeout(() => {
-                    delete rooms[roomId]
+                setTimeout(async () => {
+                    await supabase.from('rooms').delete().eq('id', roomId)
                 }, 5000)
             } else {
                 // One player remains -> Hard Reset the room back to waiting
@@ -185,15 +205,20 @@ export async function handlePlayerDisconnect(roomId: string, playerId: string) {
 export async function getAvailableRooms() {
     // Clean up stale waiting rooms (> 5 mins) before fetching
     const now = Date.now()
-    Object.keys(rooms).forEach(roomId => {
-        const room = rooms[roomId]
-        if (room && room.status === 'waiting' && (now - room.lastActive > 5 * 60 * 1000)) {
-            delete rooms[roomId] // Prune idle rooms
-        }
-    })
+    const fiveMinsAgo = now - 5 * 60 * 1000
 
-    const publicRooms = Object.values(rooms)
-        .filter(room => room.status === 'waiting')
+    // Prune idle rooms directly in DB
+    await supabase.from('rooms').delete()
+        .eq('data->>status', 'waiting')
+        .lt('last_active', fiveMinsAgo)
+
+    const { data: dbRooms } = await supabase
+        .from('rooms')
+        .select('data')
+        .eq('data->>status', 'waiting')
+
+    const publicRooms = (dbRooms || [])
+        .map(r => r.data as Room)
         .map(room => ({
             id: room.id,
             host: room.players[0]?.name || 'Unknown',
@@ -216,19 +241,24 @@ export async function joinRandomRoom(playerName: string) {
 }
 
 export async function deleteRoom(roomId: string) {
-    if (rooms[roomId]) {
-        rooms[roomId].status = 'closed'
-        await updateRoom(rooms[roomId])
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+
+    if (dbRoom) {
+        const room = dbRoom.data as Room
+        room.status = 'closed'
+        await updateRoom(room)
         // Delay deletion briefly to let SSE clients catch the "closed" status
-        setTimeout(() => {
-            delete rooms[roomId]
+        setTimeout(async () => {
+            await supabase.from('rooms').delete().eq('id', roomId)
         }, 1000)
     }
 }
 
 export async function leaveRoomLive(roomId: string, playerId: string) {
-    const room = rooms[roomId]
-    if (!room) return
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return
+
+    const room = dbRoom.data as Room
 
     if (room.status === 'waiting' || room.status === 'setup') {
         // Remove the exiting player
@@ -250,8 +280,8 @@ export async function leaveRoomLive(roomId: string, playerId: string) {
         // Let's treat it as disconnecting and closing for the opponent, to avoid weird states.
         room.status = 'closed'
         await updateRoom(room)
-        setTimeout(() => {
-            delete rooms[roomId]
+        setTimeout(async () => {
+            await supabase.from('rooms').delete().eq('id', roomId)
         }, 1000)
     }
 }
