@@ -177,9 +177,7 @@ export async function handlePlayerDisconnect(roomId: string, playerId: string) {
             // No players left -> Close and delete
             room.status = 'closed'
             await updateRoom(room)
-            setTimeout(async () => {
-                await supabase.from('rooms').delete().eq('id', roomId)
-            }, 5000)
+            await supabase.from('rooms').delete().eq('id', roomId)
         } else {
             // One player remains -> Hard Reset the room back to waiting
             room.status = 'waiting'
@@ -201,10 +199,9 @@ export async function getAvailableRooms() {
     const now = Date.now()
     const fiveMinsAgo = now - 5 * 60 * 1000
 
-    // Prune idle rooms directly in DB
+    // Prune idle rooms AND lingering closed rooms synchronously
     await supabase.from('rooms').delete()
-        .eq('data->>status', 'waiting')
-        .lt('last_active', fiveMinsAgo)
+        .or(`data->>status.eq.closed,and(data->>status.eq.waiting,last_active.lt.${fiveMinsAgo})`)
 
     const { data: dbRooms } = await supabase
         .from('rooms')
@@ -241,10 +238,8 @@ export async function deleteRoom(roomId: string) {
         const room = dbRoom.data as Room
         room.status = 'closed'
         await updateRoom(room)
-        // Delay deletion briefly to let SSE clients catch the "closed" status
-        setTimeout(async () => {
-            await supabase.from('rooms').delete().eq('id', roomId)
-        }, 1000)
+        // Delete directly. The broadcast happens immediately in updateRoom.
+        await supabase.from('rooms').delete().eq('id', roomId)
     }
 }
 
@@ -261,9 +256,7 @@ export async function leaveRoomLive(roomId: string, playerId: string) {
         // No one left, close and delete
         room.status = 'closed'
         await updateRoom(room)
-        setTimeout(async () => {
-            await supabase.from('rooms').delete().eq('id', roomId)
-        }, 1000)
+        await supabase.from('rooms').delete().eq('id', roomId)
     } else {
         // One player remains -> Hard Reset the room back to waiting
         room.status = 'waiting'
