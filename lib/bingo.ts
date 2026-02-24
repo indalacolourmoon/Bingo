@@ -1,4 +1,4 @@
-import { EventEmitter } from "events"
+import { supabase } from "./supabase"
 
 export type Player = {
     id: string
@@ -20,18 +20,12 @@ export type Room = {
 }
 
 const globalRooms = globalThis as unknown as {
-    bingoRooms: Record<string, Room>,
-    bingoEvents: EventEmitter
+    bingoRooms: Record<string, Room>
 }
 
 if (!globalRooms.bingoRooms) globalRooms.bingoRooms = {}
-if (!globalRooms.bingoEvents) {
-    globalRooms.bingoEvents = new EventEmitter()
-    globalRooms.bingoEvents.setMaxListeners(1000)
-}
 
 export const rooms = globalRooms.bingoRooms
-export const roomEvents = globalRooms.bingoEvents
 
 // Helper: Generate a random Bingo board (1-25 shuffled) or empty
 export function generateBoard(empty: boolean = false): number[] {
@@ -68,10 +62,45 @@ export function checkBoardWin(board: number[], calledNumbers: number[]): boolean
 
 
 // Helper: Increment version
-export function updateRoom(room: Room) {
+export async function updateRoom(room: Room): Promise<Room> {
     room.version = (room.version || 0) + 1
     room.lastActive = Date.now()
-    // Emit update event
-    roomEvents.emit(`update:${room.id}`, room)
-    return room
+
+    // Broadcast update event via Supabase Realtime
+    const channel = supabase.channel(`room-${room.id}`)
+
+    return new Promise((resolve) => {
+        let isResolved = false
+
+        channel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                channel.send({
+                    type: 'broadcast',
+                    event: 'update',
+                    payload: room
+                }).finally(() => {
+                    if (!isResolved) {
+                        isResolved = true
+                        supabase.removeChannel(channel)
+                        resolve(room)
+                    }
+                })
+            } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
+                if (!isResolved) {
+                    isResolved = true
+                    supabase.removeChannel(channel)
+                    resolve(room)
+                }
+            }
+        })
+
+        // Safety fallback just in case channel.subscribe hangs
+        setTimeout(() => {
+            if (!isResolved) {
+                isResolved = true
+                console.warn(`Supabase generic broadcast timeout for room-${room.id}`)
+                resolve(room)
+            }
+        }, 1500)
+    })
 }

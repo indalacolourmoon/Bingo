@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils"
 import { useRouter } from "next/navigation"
 import { useEffect, useState, useTransition, useRef } from "react"
 import { Room, Player, generateBoard } from "@/lib/bingo"
+import { supabase } from "@/lib/supabase"
 
 type BingoGameProps = {
     roomId: string
@@ -36,49 +37,47 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         roomRef.current = room
     }, [room])
 
-    // --- SSE Connection ---
+    // --- Realtime Connection ---
     useEffect(() => {
         isMountedRef.current = true
-        let eventSource: EventSource | null = null
 
-        const connectSSE = () => {
+        const connectRealtime = () => {
             // Initial fetch to get current state (in case we missed something before connecting)
             fetchRoom(roomId).then(data => {
                 if (isMountedRef.current && data) setRoom(data)
             })
 
-            // Grab playerId from localStorage
-            const playerId = localStorage.getItem(`bingo_player_id_${roomId}`)
+            const channel = supabase.channel(`room-${roomId}`)
 
-            // Connect to SSE stream
-            eventSource = new EventSource(`/api/sse/${roomId}?playerId=${playerId || ''}`)
-
-            eventSource.onmessage = (event) => {
-                try {
-                    const updatedRoom = JSON.parse(event.data)
-                    if (isMountedRef.current) {
-                        setRoom(updatedRoom)
-                    }
-                } catch (e) {
-                    console.error("Error parsing SSE data", e)
+            channel.on('broadcast', { event: 'update' }, ({ payload }) => {
+                if (isMountedRef.current) {
+                    setRoom(payload)
                 }
-            }
+            }).subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                    console.log('Connected to Supabase Realtime')
+                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                    console.error(`Supabase Realtime Error (${status})`)
+                }
+            })
 
-            eventSource.onerror = (e) => {
-                console.error("SSE Error (reconnecting...)", e)
-                eventSource?.close()
-                // Retry in 2s
-                setTimeout(() => {
-                    if (isMountedRef.current) connectSSE()
-                }, 2000)
-            }
+            return channel
         }
 
-        connectSSE()
+        const channel = connectRealtime()
+
+        const handlePageHide = () => {
+            const playerId = localStorage.getItem(`bingo_player_id_${roomId}`)
+            if (playerId && roomRef.current && roomRef.current.status !== 'finished' && roomRef.current.status !== 'closed') {
+                navigator.sendBeacon('/api/leave', JSON.stringify({ roomId, playerId }))
+            }
+        }
+        window.addEventListener('pagehide', handlePageHide)
 
         return () => {
             isMountedRef.current = false
-            eventSource?.close()
+            window.removeEventListener('pagehide', handlePageHide)
+            supabase.removeChannel(channel)
         }
     }, [roomId])
 
@@ -102,8 +101,8 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
         const handlePopState = () => {
             const currentRoom = roomRef.current
-            // If it's a finished, closed game, or a 2 player game, just leave.
-            if (currentRoom?.status === 'finished' || currentRoom?.status === 'closed' || currentRoom?.players?.length === 2) {
+            // If it's a finished or closed game, just leave.
+            if (currentRoom?.status === 'finished' || currentRoom?.status === 'closed') {
                 router.push('/')
                 return
             }
@@ -283,7 +282,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     const handleToggleReady = () => {
         if (!currentPlayer) return
         startTransition(async () => {
-            const res = await toggleReady(roomId, currentPlayer.id)
+            const res = await toggleReady(roomId, currentPlayer.id, localBoard || currentPlayer.board)
             if (res && 'error' in res) {
                 alert(res.error) // Should be "Board not full"
             }
@@ -311,8 +310,8 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     }
 
     const handleConfirmExit = async () => {
-        // If it's a finished or closed game, or a 2 player game, just leave.
-        if (room.status === 'finished' || room.status === 'closed' || room.players.length === 2) {
+        // If it's a finished or closed game, just leave.
+        if (room.status === 'finished' || room.status === 'closed') {
             router.push('/')
             return
         }
@@ -405,27 +404,27 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 </div>
             </div>
 
-            <div className="flex flex-col lg:flex-row gap-8 items-start w-full max-w-4xl px-4 relative">
-                {/* Setup Controls */}
-                {room.status === 'setup' && currentPlayer && (
-                    <div className="w-full lg:absolute lg:-top-16 lg:left-0 flex flex-col sm:flex-row justify-between items-center bg-blue-50 dark:bg-slate-800 p-3 rounded-lg border border-blue-200 dark:border-slate-700 text-sm shadow-sm gap-3 z-10 transition-all">
-                        <div className="text-blue-700 dark:text-blue-200 text-center sm:text-left">
+            {/* Setup Controls */}
+            {room.status === 'setup' && currentPlayer && (
+                <div className="w-full max-w-4xl px-4 mb-8">
+                    <div className="w-full flex flex-col sm:flex-row justify-between items-center bg-blue-50 dark:bg-slate-800 p-4 rounded-lg border border-blue-200 dark:border-slate-700 text-sm shadow-sm gap-4 transition-all">
+                        <div className="text-blue-700 dark:text-blue-200 text-center sm:text-left text-base">
                             {isBoardFull
                                 ? "Board Full! Swap numbers or click Ready."
                                 : `Place number ${nextNumberToPlace} by clicking an empty cell.`}
                         </div>
-                        <div className="flex gap-2 flex-wrap justify-center">
+                        <div className="flex gap-3 flex-wrap justify-center">
                             <button
                                 onClick={handleClear}
                                 disabled={currentPlayer.isReady}
-                                className="px-3 py-1 bg-red-100 text-red-700 hover:bg-red-200 rounded disabled:opacity-50 dark:bg-red-900 dark:text-red-200 transition-colors"
+                                className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded disabled:opacity-50 dark:bg-red-900 dark:text-red-200 transition-colors"
                             >
                                 Clear
                             </button>
                             <button
                                 onClick={handleRandomize}
                                 disabled={currentPlayer.isReady}
-                                className="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded disabled:opacity-50 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition-colors"
+                                className="px-4 py-2 bg-gray-200 hover:bg-gray-300 rounded disabled:opacity-50 dark:bg-slate-700 dark:text-slate-200 dark:hover:bg-slate-600 transition-colors"
                             >
                                 Randomize
                             </button>
@@ -433,7 +432,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                 onClick={handleToggleReady}
                                 disabled={!isBoardFull}
                                 className={cn(
-                                    "px-4 py-1 rounded font-bold transition-all shadow-sm",
+                                    "px-6 py-2 rounded font-bold transition-all shadow-sm",
                                     currentPlayer.isReady ? "bg-green-500 text-white hover:bg-green-600" : "bg-blue-500 text-white hover:bg-blue-600 disabled:bg-slate-400 disabled:cursor-not-allowed"
                                 )}
                             >
@@ -441,7 +440,10 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                             </button>
                         </div>
                     </div>
-                )}
+                </div>
+            )}
+
+            <div className="flex flex-col lg:flex-row gap-8 items-start w-full max-w-4xl px-4 relative">
 
                 {/* My Board */}
                 {currentPlayer ? (
