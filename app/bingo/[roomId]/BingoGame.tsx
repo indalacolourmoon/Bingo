@@ -345,23 +345,38 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             {showExitModal && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4">
                     <div className="bg-white dark:bg-slate-800 p-8 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in duration-200">
-                        <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-4">Leave Room?</h2>
+                        <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-4">
+                            {room.players.length === 2 ? "End the Game?" : "Leave Room?"}
+                        </h2>
                         <p className="text-slate-600 dark:text-slate-400 mb-6">
-                            You are about to leave this active room. If you make it live, it will stay open for others to join.
+                            {room.players.length === 2
+                                ? "You are in an active match. Leaving will end the game and forfeit your match. Are you sure?"
+                                : "You are about to leave this active room. If you make it live, it will stay open for others to join."}
                         </p>
                         <div className="flex flex-col gap-3">
-                            <button
-                                onClick={handleExitLive}
-                                className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 rounded transition-colors"
-                            >
-                                Make it Live (Keep Room)
-                            </button>
-                            <button
-                                onClick={handleExitDelete}
-                                className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded transition-colors"
-                            >
-                                Delete Room
-                            </button>
+                            {room.players.length === 2 ? (
+                                <button
+                                    onClick={handleExitLive}
+                                    className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded transition-colors"
+                                >
+                                    Yes, End Game
+                                </button>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={handleExitLive}
+                                        className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 rounded transition-colors"
+                                    >
+                                        Make it Live (Keep Room)
+                                    </button>
+                                    <button
+                                        onClick={handleExitDelete}
+                                        className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded transition-colors"
+                                    >
+                                        Delete Room
+                                    </button>
+                                </>
+                            )}
                             <button
                                 onClick={() => setShowExitModal(false)}
                                 className="w-full bg-gray-200 hover:bg-gray-300 text-gray-800 dark:bg-slate-700 dark:hover:bg-slate-600 dark:text-white font-semibold py-2 rounded transition-colors mt-2"

@@ -181,23 +181,17 @@ export async function handlePlayerDisconnect(roomId: string, playerId: string) {
                 await supabase.from('rooms').delete().eq('id', roomId)
             }, 5000)
         } else {
-            if (room.status === 'playing' || room.status === 'starting' || room.status === 'finished') {
-                // If the game started, opponent leaving closes the room
-                room.status = 'closed'
-                await updateRoom(room)
-                setTimeout(async () => {
-                    await supabase.from('rooms').delete().eq('id', roomId)
-                }, 5000)
-            } else {
-                // One player remains -> Hard Reset the room back to waiting
-                room.status = 'waiting'
-                room.list = []
-                room.winner = null
-                room.currentPlayerIndex = 0
-                room.startTime = undefined
-                room.players.forEach(p => p.isReady = false)
-                await updateRoom(room)
-            }
+            // One player remains -> Hard Reset the room back to waiting
+            room.status = 'waiting'
+            room.list = []
+            room.winner = null
+            room.currentPlayerIndex = 0
+            room.startTime = undefined
+            room.players.forEach(p => {
+                p.isReady = false
+                p.board = generateBoard(true) // Reset board visually
+            })
+            await updateRoom(room)
         }
     }
 }
@@ -260,28 +254,27 @@ export async function leaveRoomLive(roomId: string, playerId: string) {
 
     const room = dbRoom.data as Room
 
-    if (room.status === 'waiting' || room.status === 'setup') {
-        // Remove the exiting player
-        room.players = room.players.filter(p => p.id !== playerId)
+    // Remove the exiting player
+    room.players = room.players.filter(p => p.id !== playerId)
 
-        if (room.players.length === 0) {
-            // No one left, keep waiting
-            room.status = 'waiting'
-        } else {
-            // One player left, they become the host essentially, waiting for another
-            room.status = 'waiting'
-            // Reset the remaining player's readiness
-            room.players.forEach(p => p.isReady = false)
-        }
-
-        await updateRoom(room)
-    } else {
-        // If it's playing, leaving it live usually means surrendering, or pausing.
-        // Let's treat it as disconnecting and closing for the opponent, to avoid weird states.
+    if (room.players.length === 0) {
+        // No one left, close and delete
         room.status = 'closed'
         await updateRoom(room)
         setTimeout(async () => {
             await supabase.from('rooms').delete().eq('id', roomId)
         }, 1000)
+    } else {
+        // One player remains -> Hard Reset the room back to waiting
+        room.status = 'waiting'
+        room.list = []
+        room.winner = null
+        room.currentPlayerIndex = 0
+        room.startTime = undefined
+        room.players.forEach(p => {
+            p.isReady = false
+            p.board = generateBoard(true) // Reset board visually
+        })
+        await updateRoom(room)
     }
 }

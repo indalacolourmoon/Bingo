@@ -128,8 +128,8 @@ export function AnimatedSetupDemo() {
                 <h3 className="text-sm font-bold tracking-wider">{phase.title}</h3>
             </div>
 
-            <div className="relative pb-6">
-                <div className="grid grid-cols-5 gap-1.5 p-3 sm:p-4 bg-zinc-200 dark:bg-zinc-800/80 rounded-xl w-full sm:w-[320px] aspect-square shadow-sm">
+            <div className="relative pb-6 w-full max-w-[320px] mx-auto flex flex-col items-center">
+                <div className="grid grid-cols-5 gap-1 sm:gap-1.5 p-2 sm:p-4 bg-zinc-200 dark:bg-zinc-800/80 rounded-xl w-full aspect-square shadow-sm">
                     {board.map((num, i) => {
                         const isSelected = phase.id === 'swap' && step >= 3 && step <= 5 && i === 0;
                         return (
