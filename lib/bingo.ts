@@ -17,6 +17,7 @@ export type Room = {
     startTime?: number
     version: number // For long polling / SSE
     lastActive: number // To track idle rooms
+    isBotMatch?: boolean
 }
 
 // Removed globalThis in-memory state

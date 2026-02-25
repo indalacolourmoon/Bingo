@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Gamepad2 } from "lucide-react";
 import { useState, useTransition, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { joinRoom, getAvailableRooms } from "@/actions/numbers"
+import { joinRoom, getAvailableRooms, createBotRoom } from "@/actions/numbers"
 import { JoinModal } from "@/components/JoinModal"
 
 export default function Home() {
@@ -12,7 +12,7 @@ export default function Home() {
   const [isPending, startTransition] = useTransition()
   const [error, setError] = useState("")
   const [publicRooms, setPublicRooms] = useState<{ id: string, host: string, playerCount: number }[]>([])
-  const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, type: 'random' | 'specific', roomId?: string }>({ isOpen: false, type: 'random' })
+  const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, type: 'random' | 'specific' | 'bot', roomId?: string }>({ isOpen: false, type: 'random' })
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -71,7 +71,7 @@ export default function Home() {
         }
       }
 
-      if (targetRoomId) {
+      if (targetRoomId && modalConfig.type !== 'bot') {
         const result = await joinRoom(targetRoomId, username)
         if (result && 'error' in result && result.error) {
           setError(result.error)
@@ -80,6 +80,13 @@ export default function Home() {
           localStorage.setItem(`bingo_player_${targetRoomId}`, username)
           localStorage.setItem(`bingo_player_id_${targetRoomId}`, result.playerId as string)
           router.push(`/bingo/${targetRoomId}?player=${encodeURIComponent(username)}&playerId=${result.playerId}`)
+        }
+      } else if (modalConfig.type === 'bot') {
+        const result = await createBotRoom(username)
+        if (result && result.roomId) {
+          localStorage.setItem(`bingo_player_${result.roomId}`, username)
+          localStorage.setItem(`bingo_player_id_${result.roomId}`, result.playerId)
+          router.push(`/bingo/${result.roomId}?player=${encodeURIComponent(username)}&playerId=${result.playerId}`)
         }
       }
     })
@@ -112,6 +119,15 @@ export default function Home() {
               className="w-full h-12 bg-green-500 hover:bg-green-600 disabled:bg-zinc-300 dark:disabled:bg-zinc-700 text-white font-bold rounded-lg transition-colors"
             >
               {isPending ? "Loading..." : "Join Random Public Room"}
+            </button>
+
+            <button
+              onClick={() => setModalConfig({ isOpen: true, type: 'bot' })}
+              disabled={isPending}
+              className="w-full h-12 bg-blue-500 hover:bg-blue-600 disabled:bg-zinc-300 dark:disabled:bg-zinc-700 text-white font-bold rounded-lg transition-colors shadow-sm flex items-center justify-center gap-2"
+            >
+              <Gamepad2 className="w-5 h-5" />
+              {isPending ? "Loading..." : "Play with Computer"}
             </button>
 
             <Link
@@ -158,8 +174,8 @@ export default function Home() {
           isOpen={modalConfig.isOpen}
           onClose={() => setModalConfig({ ...modalConfig, isOpen: false })}
           onConfirm={executeJoin}
-          title={modalConfig.type === 'random' ? "Join Random Room" : "Join Room"}
-          buttonText="Join Game"
+          title={modalConfig.type === 'random' ? "Join Random Room" : modalConfig.type === 'bot' ? "Play vs Computer" : "Join Room"}
+          buttonText={modalConfig.type === 'bot' ? "Start Game" : "Join Game"}
           isPending={isPending}
         />
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { fetchRoom, callNumber, restartGame, updateBoard, toggleReady, deleteRoom, leaveRoomLive } from "@/actions/numbers"
+import { fetchRoom, callNumber, restartGame, updateBoard, toggleReady, deleteRoom, leaveRoomLive, triggerBotMove } from "@/actions/numbers"
 import { cn } from "@/lib/utils"
 // import { useRouter } from "next/navigation" 
 import { useRouter } from "next/navigation"
@@ -134,6 +134,19 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             return () => clearInterval(interval)
         }
     }, [room?.status, room?.startTime, roomId])
+
+    // --- Bot Turn Logic ---
+    useEffect(() => {
+        if (!room || room.status !== 'playing' || !room.isBotMatch) return
+
+        const activePlayer = room.players[room.currentPlayerIndex]
+        if (activePlayer.id === 'bot') {
+            const timer = setTimeout(() => {
+                triggerBotMove(roomId)
+            }, 1500) // 1.5 second artificial delay for realism
+            return () => clearTimeout(timer)
+        }
+    }, [room, roomId])
 
     // Sync local board only once when entering setup
     useEffect(() => {
@@ -346,20 +359,29 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm p-4">
                     <div className="bg-white dark:bg-slate-800 p-8 rounded-2xl shadow-2xl max-w-sm w-full animate-in zoom-in duration-200">
                         <h2 className="text-2xl font-bold text-slate-800 dark:text-white mb-4">
-                            {room.players.length === 2 ? "End the Game?" : "Leave Room?"}
+                            {room.players.length === 2 && !room.isBotMatch ? "End the Game?" : room.isBotMatch ? "Quit Match?" : "Leave Room?"}
                         </h2>
                         <p className="text-slate-600 dark:text-slate-400 mb-6">
-                            {room.players.length === 2
+                            {room.players.length === 2 && !room.isBotMatch
                                 ? "You are in an active match. Leaving will end the game and forfeit your match. Are you sure?"
-                                : "You are about to leave this active room. If you make it live, it will stay open for others to join."}
+                                : room.isBotMatch
+                                    ? "Are you sure you want to quit against the Computer? Your progress will be lost."
+                                    : "You are about to leave this active room. If you make it live, it will stay open for others to join."}
                         </p>
                         <div className="flex flex-col gap-3">
-                            {room.players.length === 2 ? (
+                            {room.players.length === 2 && !room.isBotMatch ? (
                                 <button
                                     onClick={handleExitLive}
                                     className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded transition-colors"
                                 >
                                     Yes, End Game
+                                </button>
+                            ) : room.isBotMatch ? (
+                                <button
+                                    onClick={handleExitDelete}
+                                    className="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-2 rounded transition-colors"
+                                >
+                                    Yes, Quit Match
                                 </button>
                             ) : (
                                 <>

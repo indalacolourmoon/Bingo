@@ -3,6 +3,30 @@ import { revalidatePath } from "next/cache"
 import { updateRoom, generateBoard, checkBoardWin, Room } from "@/lib/bingo"
 import { supabaseAdmin as supabase } from "@/lib/supabase"
 
+export async function createBotRoom(playerName: string) {
+    const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
+    const playerId = Math.random().toString(36).substring(7)
+
+    // Create room with bot pre-filled and humans ready to setup
+    const room: Room = {
+        id: roomId,
+        list: [],
+        currentPlayerIndex: 0,
+        players: [
+            { id: playerId, name: playerName, board: generateBoard(true), isReady: false }, // empty board
+            { id: 'bot', name: "Computer", board: generateBoard(), isReady: true } // full randomized board
+        ],
+        winner: null,
+        status: 'setup',
+        version: 1,
+        lastActive: Date.now(),
+        isBotMatch: true
+    }
+    await updateRoom(room)
+
+    return { roomId, playerId }
+}
+
 export async function createRoom(playerName: string) {
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
     const playerId = Math.random().toString(36).substring(7)
@@ -117,6 +141,82 @@ export async function toggleReady(roomId: string, playerId: string, currentBoard
     return room
 }
 
+function getSmartBotMove(botBoard: number[], calledNumbers: number[]): number {
+    const isMarked = (num: number) => calledNumbers.includes(num);
+    const getUnmarkedInLine = (lineIndices: number[]) => lineIndices.filter(i => !isMarked(botBoard[i])).map(i => botBoard[i]);
+
+    let bestMove: number | null = null;
+    let minNeeded = 6; // Anything config > 5 means no lines found yet
+
+    const lines = [
+        // Rows
+        [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
+        // Cols
+        [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
+        // Diags
+        [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
+    ];
+
+    // Find the line that needs the FEWEST numbers to finish (but > 0)
+    for (const line of lines) {
+        const unmarked = getUnmarkedInLine(line);
+        if (unmarked.length > 0 && unmarked.length < minNeeded) {
+            minNeeded = unmarked.length;
+            bestMove = unmarked[Math.floor(Math.random() * unmarked.length)]; // Random if multiple unmarked in the best line
+        } else if (unmarked.length > 0 && unmarked.length === minNeeded) {
+            // Coin flip to add variety if multiple lines are tied for best
+            if (Math.random() > 0.5) {
+                bestMove = unmarked[Math.floor(Math.random() * unmarked.length)];
+            }
+        }
+    }
+
+    // Fallback if something weird happens (e.g., all lines full but game isn't over?) -> Should never happen
+    if (bestMove === null) {
+        const remaining = botBoard.filter(n => !isMarked(n));
+        return remaining[Math.floor(Math.random() * remaining.length)];
+    }
+
+    return bestMove;
+}
+
+export async function triggerBotMove(roomId: string) {
+    const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
+    if (!dbRoom) return
+
+    const room = dbRoom.data as Room
+    if (room.status !== 'playing') return
+
+    const activePlayer = room.players[room.currentPlayerIndex]
+    // Double check it's actually the bot's turn
+    if (activePlayer.id !== 'bot') return
+
+    // Pick a smart number
+    const botBoard = activePlayer.board;
+    const currentList = room.list;
+    const move = getSmartBotMove(botBoard, currentList);
+
+    // Call the number
+    room.list.push(move)
+
+    // Check Win for all players
+    for (const p of room.players) {
+        if (checkBoardWin(p.board, room.list)) {
+            room.winner = p.name
+            room.status = 'finished'
+            await updateRoom(room)
+            revalidatePath(`/bingo/${roomId}`)
+            return room
+        }
+    }
+
+    // Switch turns
+    room.currentPlayerIndex = room.currentPlayerIndex === 0 ? 1 : 0
+    await updateRoom(room)
+    revalidatePath(`/bingo/${roomId}`)
+    return room
+}
+
 export async function callNumber(roomId: string, number: number) {
     const { data: dbRoom } = await supabase.from('rooms').select('data').eq('id', roomId).single()
     if (!dbRoom) return
@@ -173,8 +273,8 @@ export async function handlePlayerDisconnect(roomId: string, playerId: string) {
         // Remove the disconnected player
         room.players = room.players.filter(p => p.id !== playerId)
 
-        if (room.players.length === 0) {
-            // No players left -> Close and delete
+        if (room.players.length === 0 || (room.isBotMatch && room.players.length === 1 && room.players[0].id === 'bot')) {
+            // No real players left -> Close and delete
             room.status = 'closed'
             await updateRoom(room)
             await supabase.from('rooms').delete().eq('id', roomId)
@@ -252,8 +352,8 @@ export async function leaveRoomLive(roomId: string, playerId: string) {
     // Remove the exiting player
     room.players = room.players.filter(p => p.id !== playerId)
 
-    if (room.players.length === 0) {
-        // No one left, close and delete
+    if (room.players.length === 0 || (room.isBotMatch && room.players.length === 1 && room.players[0].id === 'bot')) {
+        // No real players left, close and delete
         room.status = 'closed'
         await updateRoom(room)
         await supabase.from('rooms').delete().eq('id', roomId)
