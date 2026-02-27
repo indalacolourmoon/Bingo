@@ -1,3 +1,4 @@
+export const runtime = 'edge';
 import { handlePlayerDisconnect } from "@/actions/numbers";
 import { NextRequest, NextResponse } from "next/server";
 

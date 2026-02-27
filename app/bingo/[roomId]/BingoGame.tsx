@@ -42,24 +42,36 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         isMountedRef.current = true
 
         const connectRealtime = () => {
-            // Initial fetch to get current state (in case we missed something before connecting)
+            // Initial fetch to get current state
             fetchRoom(roomId).then(data => {
                 if (isMountedRef.current && data) setRoom(data)
             })
 
-            const channel = supabase.channel(`room-${roomId}`)
-
-            channel.on('broadcast', { event: 'update' }, ({ payload }) => {
-                if (isMountedRef.current) {
-                    setRoom(payload)
-                }
-            }).subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    console.log('Connected to Supabase Realtime')
-                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                    console.error(`Supabase Realtime Error (${status})`)
-                }
-            })
+            const channel = supabase
+                .channel(`room-db-${roomId}`)
+                .on(
+                    'postgres_changes',
+                    {
+                        event: '*',
+                        schema: 'public',
+                        table: 'rooms',
+                        filter: `id=eq.${roomId}`
+                    },
+                    (payload) => {
+                        if (isMountedRef.current && payload.new) {
+                            // The actual room data is inside the 'data' column
+                            const updatedRoom = (payload.new as any).data as Room
+                            setRoom(updatedRoom)
+                        }
+                    }
+                )
+                .subscribe((status) => {
+                    if (status === 'SUBSCRIBED') {
+                        console.log('Connected to Supabase Realtime (DB Changes)')
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                        console.error(`Supabase Realtime Error (${status})`)
+                    }
+                })
 
             return channel
         }
@@ -293,11 +305,22 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     }
 
     const handleToggleReady = () => {
-        if (!currentPlayer) return
+        if (!currentPlayer || !room) return
+
+        // Optimistic UI: Update local room state immediately
+        const optimisticRoom = { ...room }
+        const pIdx = optimisticRoom.players.findIndex(p => p.id === currentPlayer.id)
+        if (pIdx !== -1) {
+            optimisticRoom.players[pIdx].isReady = !optimisticRoom.players[pIdx].isReady
+            setRoom(optimisticRoom)
+        }
+
         startTransition(async () => {
             const res = await toggleReady(roomId, currentPlayer.id, localBoard || currentPlayer.board)
             if (res && 'error' in res) {
                 alert(res.error) // Should be "Board not full"
+                // Rollback on error (the Realtime listener will eventually sync correctly anyway)
+                fetchRoom(roomId).then(r => setRoom(r || undefined))
             }
         })
     }

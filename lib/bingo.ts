@@ -62,7 +62,8 @@ export async function updateRoom(room: Room): Promise<Room> {
     room.version = (room.version || 0) + 1
     room.lastActive = Date.now()
 
-    // 1. Save state to Supabase Postgres
+    // Save state to Supabase Postgres
+    // Postgres Changes on the client will handle the notification automatically
     const { error } = await supabase
         .from('rooms')
         .upsert({
@@ -75,41 +76,5 @@ export async function updateRoom(room: Room): Promise<Room> {
         console.error("Error saving room to Supabase:", error)
     }
 
-    // 2. Broadcast update event via Supabase Realtime
-    const channel = supabase.channel(`room-${room.id}`)
-
-    return new Promise((resolve) => {
-        let isResolved = false
-
-        channel.subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-                channel.send({
-                    type: 'broadcast',
-                    event: 'update',
-                    payload: room
-                }).finally(() => {
-                    if (!isResolved) {
-                        isResolved = true
-                        supabase.removeChannel(channel)
-                        resolve(room)
-                    }
-                })
-            } else if (status === 'TIMED_OUT' || status === 'CLOSED' || status === 'CHANNEL_ERROR') {
-                if (!isResolved) {
-                    isResolved = true
-                    supabase.removeChannel(channel)
-                    resolve(room)
-                }
-            }
-        })
-
-        // Safety fallback just in case channel.subscribe hangs
-        setTimeout(() => {
-            if (!isResolved) {
-                isResolved = true
-                console.warn(`Supabase generic broadcast timeout for room-${room.id}`)
-                resolve(room)
-            }
-        }, 1500)
-    })
+    return room
 }

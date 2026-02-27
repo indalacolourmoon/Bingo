@@ -1,9 +1,16 @@
 'use server'
+export const runtime = 'edge'
 import { revalidatePath } from "next/cache"
 import { updateRoom, generateBoard, checkBoardWin, Room } from "@/lib/bingo"
 import { supabaseAdmin as supabase } from "@/lib/supabase"
 
 export async function createBotRoom(playerName: string) {
+    // 0. Redundant cleanup sweep to ensure no ghost rooms clutter the DB
+    const now = Date.now()
+    const fiveMinsAgo = now - 5 * 60 * 1000
+    await supabase.from('rooms').delete()
+        .or(`data->>status.eq.closed,and(data->>status.eq.waiting,last_active.lt.${fiveMinsAgo})`)
+
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
     const playerId = Math.random().toString(36).substring(7)
 
@@ -28,6 +35,12 @@ export async function createBotRoom(playerName: string) {
 }
 
 export async function createRoom(playerName: string) {
+    // 0. Redundant cleanup sweep
+    const now = Date.now()
+    const fiveMinsAgo = now - 5 * 60 * 1000
+    await supabase.from('rooms').delete()
+        .or(`data->>status.eq.closed,and(data->>status.eq.waiting,last_active.lt.${fiveMinsAgo})`)
+
     const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
     const playerId = Math.random().toString(36).substring(7)
     const room: Room = {
