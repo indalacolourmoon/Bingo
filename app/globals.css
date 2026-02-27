@@ -116,6 +116,14 @@
   --sidebar-ring: oklch(0.556 0 0);
 }
 
+@keyframes bounce-short {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+.animate-bounce-short {
+  animation: bounce-short 0.5s ease-in-out;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

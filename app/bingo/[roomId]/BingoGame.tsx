@@ -5,8 +5,9 @@ import { cn } from "@/lib/utils"
 // import { useRouter } from "next/navigation" 
 import { useRouter } from "next/navigation"
 import { useEffect, useState, useTransition, useRef } from "react"
-import { Room, Player, generateBoard } from "@/lib/bingo"
+import { Room, Player, generateBoard, getWinInfo } from "@/lib/bingo"
 import { supabase } from "@/lib/supabase"
+import { Check, Copy, RefreshCw, Trophy, User, X, Home, Bot, Trophy as TrophyIcon, Sparkles } from "lucide-react"
 
 type BingoGameProps = {
     roomId: string
@@ -449,11 +450,22 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                     <p className="text-slate-500 dark:text-slate-400">Player: <span className="font-semibold text-amber-600">{playerName}</span></p>
                 </div>
                 <div className="text-right">
-                    <div className={cn("text-xl font-bold px-4 py-2 rounded-full shadow-sm",
+                    <div className={cn("text-xl font-bold px-4 py-2 rounded-full shadow-sm flex items-center gap-3",
                         room.status === 'playing' ? (room.players[room.currentPlayerIndex]?.name === playerName ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200" : "bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200") : "bg-gray-100 dark:bg-slate-800 dark:text-slate-200",
                         room.status === 'starting' && "bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200"
                     )}>
                         {getGameStateText()}
+                        {(room.status === 'playing' || room.status === 'finished') && room.list.length > 0 && (
+                            <span className="w-px h-6 bg-slate-300 dark:bg-slate-700" />
+                        )}
+                        {(room.status === 'playing' || room.status === 'finished') && room.list.length > 0 && (
+                            <div className="flex items-center gap-2">
+                                <span className="text-xs uppercase text-slate-400 font-semibold tracking-tighter">Last Called</span>
+                                <span className="text-2xl text-amber-600 animate-in slide-in-from-top-2 duration-500">
+                                    {room.list[room.list.length - 1]}
+                                </span>
+                            </div>
+                        )}
                     </div>
                     <button
                         onClick={handleConfirmExit}
@@ -507,42 +519,87 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
                 {/* My Board */}
                 {currentPlayer ? (
-                    <div className="bg-white dark:bg-slate-800 p-4 sm:p-6 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 w-full lg:w-auto transition-colors duration-300">
-                        <h2 className="text-center font-bold mb-4 text-lg border-b dark:border-slate-600 pb-2 dark:text-white">Your Board</h2>
-                        <div className="grid grid-cols-5 gap-2 select-none touch-none">
-                            {(activeBoard || []).map((num: number, idx: number) => {
-                                const status = getCellStatus(num)
-                                const isSelected = selectedCell === idx
-                                return (
-                                    <button
-                                        key={idx}
-                                        disabled={
-                                            (room.status === 'setup' && currentPlayer.isReady) ||
-                                            (room.status === 'playing' && (!room.list.includes(num) && room.players[room.currentPlayerIndex]?.name !== playerName)) ||
-                                            (room.status !== 'setup' && room.status !== 'playing')
-                                        }
-                                        onPointerDown={(e) => onPointerDown(e, idx, num)}
-                                        onPointerEnter={() => onPointerEnter(idx, num)}
-                                        className={cn(
-                                            "w-10 h-10 sm:w-14 sm:h-14 flex items-center justify-center rounded-md font-bold text-lg sm:text-xl transition-all duration-150",
-                                            // Status based styles
-                                            status === 'marked' ? "bg-red-500 text-white shadow-inner" :
-                                                status === 'empty' ? "bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600" :
-                                                    "bg-amber-100 text-amber-900 border-2 border-amber-200 hover:border-amber-400 dark:bg-amber-900/50 dark:text-amber-100 dark:border-amber-800",
+                    <div className="flex flex-col gap-6 w-full lg:w-auto">
+                        {/* Progress Header */}
+                        <div className="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-md border border-slate-200 dark:border-slate-700 flex flex-col items-center gap-3">
+                            <div className="flex justify-between w-full items-center px-2">
+                                <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Progress</span>
+                                <span className="text-sm font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 px-2 py-0.5 rounded">
+                                    {getWinInfo(currentPlayer.board, room.list).lineCount} / 5 Lines
+                                </span>
+                            </div>
 
-                                            // Setup phase specific
-                                            room.status === 'setup' && !currentPlayer.isReady && "cursor-pointer",
-                                            isSelected && "ring-4 ring-blue-500 z-10 scale-110 bg-blue-100 dark:bg-blue-900",
+                            {/* B-I-N-G-O Letters */}
+                            <div className="flex gap-2">
+                                {['B', 'I', 'N', 'G', 'O'].map((letter, i) => {
+                                    const { lineCount } = getWinInfo(currentPlayer.board, room.list);
+                                    const isLit = lineCount > i;
+                                    return (
+                                        <div
+                                            key={letter}
+                                            className={cn(
+                                                "w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center rounded-lg font-black text-xl sm:text-2xl transition-all duration-500 shadow-sm border-2",
+                                                isLit
+                                                    ? "bg-amber-500 text-white border-amber-400 scale-110 shadow-amber-500/50 animate-bounce-short"
+                                                    : "bg-slate-100 text-slate-300 border-slate-200 dark:bg-slate-700 dark:text-slate-600 dark:border-slate-600"
+                                            )}
+                                        >
+                                            {letter}
+                                        </div>
+                                    )
+                                })}
+                            </div>
+                        </div>
 
-                                            // Game phase specific
-                                            room.status === 'playing' && room.players[room.currentPlayerIndex]?.name === playerName && status !== 'marked' && "hover:bg-amber-200 dark:hover:bg-amber-800 hover:scale-105 active:scale-95",
-                                            room.status === 'playing' && status !== 'marked' && room.players[room.currentPlayerIndex]?.name !== playerName && "opacity-50 grayscale"
-                                        )}
-                                    >
-                                        {num !== 0 ? num : ""}
-                                    </button>
-                                )
-                            })}
+                        <div className="bg-white dark:bg-slate-800 p-4 sm:p-6 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 w-full transition-colors duration-300">
+                            <h2 className="text-center font-bold mb-4 text-lg border-b dark:border-slate-600 pb-2 dark:text-white flex items-center justify-center gap-2">
+                                <User className="w-5 h-5 text-blue-500" />
+                                Your Board
+                            </h2>
+                            <div className="grid grid-cols-5 gap-2 select-none touch-none">
+                                {(activeBoard || []).map((num: number, idx: number) => {
+                                    const status = getCellStatus(num)
+                                    const isSelected = selectedCell === idx
+                                    const { winningIndices } = getWinInfo(currentPlayer.board, room.list)
+                                    const isWinningCell = winningIndices.has(idx)
+
+                                    return (
+                                        <button
+                                            key={idx}
+                                            disabled={
+                                                (room.status === 'setup' && currentPlayer.isReady) ||
+                                                (room.status === 'playing' && (!room.list.includes(num) && room.players[room.currentPlayerIndex]?.name !== playerName)) ||
+                                                (room.status !== 'setup' && room.status !== 'playing')
+                                            }
+                                            onPointerDown={(e) => onPointerDown(e, idx, num)}
+                                            onPointerEnter={() => onPointerEnter(idx, num)}
+                                            className={cn(
+                                                "w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-md font-bold text-lg sm:text-xl transition-all duration-150 relative overflow-hidden",
+                                                // Status based styles
+                                                status === 'marked' ? (isWinningCell ? "bg-amber-500 text-white shadow-lg ring-2 ring-white/50" : "bg-red-500 text-white shadow-inner") :
+                                                    status === 'empty' ? "bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600" :
+                                                        "bg-amber-100 text-amber-900 border-2 border-amber-200 hover:border-amber-400 dark:bg-amber-900/50 dark:text-amber-100 dark:border-amber-800",
+
+                                                // Setup phase specific
+                                                room.status === 'setup' && !currentPlayer.isReady && "cursor-pointer",
+                                                isSelected && "ring-4 ring-blue-500 z-10 scale-110 bg-blue-100 dark:bg-blue-900",
+
+                                                // Game phase specific
+                                                room.status === 'playing' && room.players[room.currentPlayerIndex]?.name === playerName && status !== 'marked' && "hover:bg-amber-200 dark:hover:bg-amber-800 hover:scale-105 active:scale-95",
+                                                room.status === 'playing' && status !== 'marked' && room.players[room.currentPlayerIndex]?.name !== playerName && "opacity-50 grayscale",
+
+                                                // Winning animation
+                                                isWinningCell && "animate-pulse"
+                                            )}
+                                        >
+                                            {num !== 0 ? num : ""}
+                                            {isWinningCell && (
+                                                <div className="absolute inset-0 bg-white/20 animate-ping pointer-events-none" style={{ animationDuration: '2s' }} />
+                                            )}
+                                        </button>
+                                    )
+                                })}
+                            </div>
                         </div>
                     </div>
                 ) : (
@@ -567,7 +624,26 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                                 {opponent.isReady ? "Ready" : "Preparing"}
                                             </span>
                                         ) : (
-                                            <span className="text-xs text-gray-500 dark:text-slate-500">Opponent</span>
+                                            <div className="flex flex-col items-end gap-1">
+                                                <span className="text-[10px] font-bold text-amber-600 uppercase">
+                                                    {getWinInfo(opponent.board, room.list).lineCount}/5 Lines
+                                                </span>
+                                                <div className="flex gap-0.5 mt-0.5">
+                                                    {['B', 'I', 'N', 'G', 'O'].map((l, i) => (
+                                                        <div
+                                                            key={l}
+                                                            className={cn(
+                                                                "w-4 h-4 flex items-center justify-center rounded-[2px] text-[8px] font-black transition-all duration-300",
+                                                                getWinInfo(opponent.board, room.list).lineCount > i
+                                                                    ? "bg-amber-500 text-white shadow-sm"
+                                                                    : "bg-slate-100 text-slate-300 dark:bg-slate-700 dark:text-slate-500"
+                                                            )}
+                                                        >
+                                                            {l}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
                                         )}
                                     </div>
                                     <div className="text-xs text-gray-400">

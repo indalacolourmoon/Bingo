@@ -34,26 +34,38 @@ export function generateBoard(empty: boolean = false): number[] {
     return numbers
 }
 
+// Helper: Get detailed win information (completed lines and specific indices)
+export function getWinInfo(board: number[], calledNumbers: number[]): { lineCount: number, winningIndices: Set<number> } {
+    if (!board || board.length !== 25) return { lineCount: 0, winningIndices: new Set() }
+
+    const isMarked = (i: number) => calledNumbers.includes(board[i])
+    const winningIndices = new Set<number>();
+    let lineCount = 0;
+
+    const lines = [
+        // Rows
+        [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
+        // Cols
+        [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
+        // Diagonals
+        [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
+    ];
+
+    for (const line of lines) {
+        if (line.every(idx => isMarked(idx))) {
+            lineCount++;
+            line.forEach(idx => winningIndices.add(idx));
+        }
+    }
+
+    return { lineCount, winningIndices };
+}
+
 // Helper: Check for a win (Requires 5 completed lines)
 export function checkBoardWin(board: number[], calledNumbers: number[]): boolean {
     if (board.includes(0)) return false // Incomplete board cannot win
-    const isMarked = (i: number) => calledNumbers.includes(board[i])
-
-    let completedLines = 0;
-
-    // Rows
-    for (let i = 0; i < 5; i++) {
-        if ([0, 1, 2, 3, 4].every(offset => isMarked(i * 5 + offset))) completedLines++;
-    }
-    // Cols
-    for (let i = 0; i < 5; i++) {
-        if ([0, 1, 2, 3, 4].every(offset => isMarked(offset * 5 + i))) completedLines++;
-    }
-    // Diagonals
-    if ([0, 6, 12, 18, 24].every(i => isMarked(i))) completedLines++;
-    if ([4, 8, 12, 16, 20].every(i => isMarked(i))) completedLines++;
-
-    return completedLines >= 5
+    const { lineCount } = getWinInfo(board, calledNumbers);
+    return lineCount >= 5
 }
 
 
