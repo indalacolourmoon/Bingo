@@ -1,3 +1,4 @@
+export const runtime = 'edge'
 import BingoGame from "./BingoGame"
 
 type PageProps = {

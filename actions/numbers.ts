@@ -1,5 +1,4 @@
 'use server'
-export const runtime = 'edge'
 import { revalidatePath } from "next/cache"
 import { updateRoom, generateBoard, checkBoardWin, Room } from "@/lib/bingo"
 import { supabaseAdmin as supabase } from "@/lib/supabase"
