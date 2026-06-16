@@ -8,7 +8,7 @@ export const getBingoSocket = (): Socket => {
   if (!socket) {
     socket = io(`${SOCKET_URL}/bingo`, {
       autoConnect: false,
-      transports: ["websocket"],
+      transports: ["polling", "websocket"],
     });
   }
   return socket;
