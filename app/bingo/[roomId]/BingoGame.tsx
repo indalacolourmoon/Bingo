@@ -1,12 +1,10 @@
 'use client'
 
-import { fetchRoom, callNumber, restartGame, updateBoard, toggleReady, deleteRoom, leaveRoomLive, triggerBotMove } from "@/actions/numbers"
 import { cn } from "@/lib/utils"
-// import { useRouter } from "next/navigation" 
 import { useRouter } from "next/navigation"
-import { useEffect, useState, useTransition, useRef } from "react"
-import { Room, Player, generateBoard, getWinInfo } from "@/lib/bingo"
-import { supabase } from "@/lib/supabase"
+import { useEffect, useState, useRef } from "react"
+import { Room, Player, generateBoard, getWinInfo, checkBoardWin, getSmartBotMove } from "@/lib/bingo"
+import { getBingoSocket } from "@/lib/socket"
 import { Check, Copy, RefreshCw, Trophy, User, X, Home, Bot, Trophy as TrophyIcon, Sparkles } from "lucide-react"
 
 type BingoGameProps = {
@@ -16,9 +14,8 @@ type BingoGameProps = {
 
 export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     const router = useRouter()
-    const [, startTransition] = useTransition()
 
-    const [room, setRoom] = useState<Room | undefined>(undefined)
+    const [room, setRoom] = useState<Room | null | undefined>(undefined)
     const [selectedCell, setSelectedCell] = useState<number | null>(null) // Index of selected cell for swap
 
     // Setup Phase State
@@ -30,59 +27,91 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     const [timeLeft, setTimeLeft] = useState<number>(0)
 
     const [showExitModal, setShowExitModal] = useState(false)
+    const [copied, setCopied] = useState(false)
+
+    const handleCopyCode = async () => {
+        try {
+            await navigator.clipboard.writeText(roomId)
+            setCopied(true)
+            setTimeout(() => setCopied(false), 2000)
+        } catch (err) {
+            console.error("Failed to copy room ID:", err)
+        }
+    }
 
     const isMountedRef = useRef(true)
-    const roomRef = useRef<Room | undefined>(undefined)
+    const roomRef = useRef<Room | null | undefined>(undefined)
 
     useEffect(() => {
         roomRef.current = room
     }, [room])
 
-    // --- Realtime Connection ---
-    useEffect(() => {
-        isMountedRef.current = true
-
-        const connectRealtime = () => {
-            // Initial fetch to get current state
-            fetchRoom(roomId).then(data => {
-                if (isMountedRef.current && data) setRoom(data)
-            })
-
-            const channel = supabase
-                .channel(`room-db-${roomId}`)
-                .on(
-                    'postgres_changes',
-                    {
-                        event: '*',
-                        schema: 'public',
-                        table: 'rooms',
-                        filter: `id=eq.${roomId}`
-                    },
-                    (payload) => {
-                        if (isMountedRef.current && payload.new) {
-                            // The actual room data is inside the 'data' column
-                            const updatedRoom = (payload.new as any).data as Room
-                            setRoom(updatedRoom)
-                        }
-                    }
-                )
-                .subscribe((status) => {
-                    if (status === 'SUBSCRIBED') {
-                        console.log('Connected to Supabase Realtime (DB Changes)')
-                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                        console.error(`Supabase Realtime Error (${status})`)
-                    }
-                })
-
-            return channel
+    const saveRoom = (updatedRoom: Room) => {
+        setRoom(updatedRoom)
+        const isBot = new URLSearchParams(window.location.search).get("bot") === "true"
+        if (isBot) {
+            sessionStorage.setItem(`bingo_room_${roomId}`, JSON.stringify(updatedRoom))
+        } else {
+            getBingoSocket().emit("updateRoom", updatedRoom)
         }
+    }
 
-        const channel = connectRealtime()
+    // Load local state if it's an offline bot match
+    useEffect(() => {
+        const isBot = new URLSearchParams(window.location.search).get("bot") === "true"
+        if (isBot) {
+            const saved = sessionStorage.getItem(`bingo_room_${roomId}`)
+            if (saved) {
+                setRoom(JSON.parse(saved))
+            } else {
+                setRoom(null) // room not found
+            }
+        }
+    }, [roomId])
+
+    // --- Socket Connection ---
+    useEffect(() => {
+        const isBot = new URLSearchParams(window.location.search).get("bot") === "true"
+        if (isBot) return; // Do not touch socket at all for bot matches!
+
+        isMountedRef.current = true
+        const socket = getBingoSocket()
+        socket.connect()
+
+        const playerId = sessionStorage.getItem(`bingo_player_id_${roomId}`) || Math.random().toString(36).substring(7)
+
+        socket.emit("joinRoom", {
+            roomId,
+            player: {
+                id: playerId,
+                name: playerName || "Guest",
+                board: generateBoard(true),
+                isReady: false
+            }
+        })
+
+        socket.on("roomUpdated", (updatedRoom: Room) => {
+            if (isMountedRef.current) {
+                setRoom(updatedRoom)
+            }
+        })
+
+        socket.on("joinError", (err: { error: string }) => {
+            if (isMountedRef.current) {
+                console.error("Socket join error:", err.error)
+                setRoom(null)
+            }
+        })
+
+        socket.on("roomClosed", () => {
+            if (isMountedRef.current) {
+                router.push('/')
+            }
+        })
 
         const handlePageHide = () => {
-            const playerId = localStorage.getItem(`bingo_player_id_${roomId}`)
-            if (playerId && roomRef.current && roomRef.current.status !== 'finished' && roomRef.current.status !== 'closed') {
-                navigator.sendBeacon('/api/leave', JSON.stringify({ roomId, playerId }))
+            if (roomRef.current && roomRef.current.status !== 'finished' && roomRef.current.status !== 'closed') {
+                socket.emit("leaveRoom", { roomId, playerId })
             }
         }
         window.addEventListener('pagehide', handlePageHide)
@@ -90,9 +119,15 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         return () => {
             isMountedRef.current = false
             window.removeEventListener('pagehide', handlePageHide)
-            supabase.removeChannel(channel)
+            socket.off("roomUpdated")
+            socket.off("joinError")
+            socket.off("roomClosed")
+            if (roomRef.current && roomRef.current.status !== 'finished' && roomRef.current.status !== 'closed') {
+                socket.emit("leaveRoom", { roomId, playerId })
+            }
+            socket.disconnect()
         }
-    }, [roomId])
+    }, [roomId, playerName])
 
     // Handle BeforeUnload & Closed Room Redirects & Back Button
     useEffect(() => {
@@ -137,16 +172,18 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 const diff = Math.max(0, Math.ceil((room.startTime! + 5000 - Date.now()) / 1000))
                 setTimeLeft(diff)
 
-                // If time is up, trigger a server check to transition state
+                // If time is up, transition state to playing
                 if (diff <= 0) {
                     clearInterval(interval)
-                    // Call fetchRoom to trigger the lazy state update on server
-                    fetchRoom(roomId)
+                    if (room.isBotMatch || room.players[0]?.name === playerName) {
+                        const updatedRoom = { ...room, status: 'playing' as const }
+                        saveRoom(updatedRoom)
+                    }
                 }
             }, 100)
             return () => clearInterval(interval)
         }
-    }, [room?.status, room?.startTime, roomId])
+    }, [room?.status, room?.startTime, roomId, playerName])
 
     // --- Bot Turn Logic ---
     useEffect(() => {
@@ -155,7 +192,34 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         const activePlayer = room.players[room.currentPlayerIndex]
         if (activePlayer.id === 'bot') {
             const timer = setTimeout(() => {
-                triggerBotMove(roomId)
+                const botBoard = activePlayer.board
+                const currentList = room.list
+                const move = getSmartBotMove(botBoard, currentList)
+
+                const newList = [...currentList, move]
+                let winner: string | null = null
+                let newStatus = room.status
+
+                for (const p of room.players) {
+                    if (checkBoardWin(p.board, newList)) {
+                        winner = p.name
+                        newStatus = 'finished'
+                    }
+                }
+
+                const nextPlayerIndex = room.currentPlayerIndex === 0 ? 1 : 0
+
+                const updatedRoom = {
+                    ...room,
+                    list: newList,
+                    winner,
+                    status: newStatus,
+                    currentPlayerIndex: nextPlayerIndex,
+                    version: room.version + 1,
+                    lastActive: Date.now()
+                }
+
+                saveRoom(updatedRoom)
             }, 1500) // 1.5 second artificial delay for realism
             return () => clearTimeout(timer)
         }
@@ -238,9 +302,16 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
         setLocalBoard(newBoard)
 
-        startTransition(async () => {
-            await updateBoard(roomId, currentPlayer.id, newBoard)
-        })
+        const updatedPlayers = room.players.map(p =>
+            p.id === currentPlayer.id ? { ...p, board: newBoard } : p
+        )
+        const updatedRoom = {
+            ...room,
+            players: updatedPlayers,
+            version: room.version + 1,
+            lastActive: Date.now()
+        }
+        saveRoom(updatedRoom)
     }
 
     const onPointerDown = (e: React.PointerEvent, idx: number, num: number) => {
@@ -248,7 +319,30 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         if (room?.status === 'playing') {
             const isMyTurn = room.players[room.currentPlayerIndex]?.name === playerName
             if (!isMyTurn || room.list.includes(num)) return
-            startTransition(async () => { await callNumber(roomId, num) })
+            
+            const newList = [...room.list, num]
+            let winner: string | null = null
+            let newStatus: 'waiting' | 'setup' | 'starting' | 'playing' | 'finished' | 'closed' = room.status
+
+            for (const player of room.players) {
+                if (checkBoardWin(player.board, newList)) {
+                    winner = player.name
+                    newStatus = 'finished'
+                }
+            }
+
+            const nextPlayerIndex = (room.currentPlayerIndex + 1) % room.players.length
+
+            const updatedRoom = {
+                ...room,
+                list: newList,
+                winner,
+                status: newStatus,
+                currentPlayerIndex: nextPlayerIndex,
+                version: room.version + 1,
+                lastActive: Date.now()
+            }
+            saveRoom(updatedRoom)
             return
         }
         if (room?.status !== 'setup' || currentPlayer.isReady) return
@@ -271,9 +365,16 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                     newBoard[idx] = temp
 
                     setLocalBoard(newBoard)
-                    startTransition(async () => {
-                        await updateBoard(roomId, currentPlayer.id, newBoard)
-                    })
+                    const updatedPlayers = room.players.map(p =>
+                        p.id === currentPlayer.id ? { ...p, board: newBoard } : p
+                    )
+                    const updatedRoom = {
+                        ...room,
+                        players: updatedPlayers,
+                        version: room.version + 1,
+                        lastActive: Date.now()
+                    }
+                    saveRoom(updatedRoom)
                 }
                 setSelectedCell(null)
             }
@@ -288,60 +389,114 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
     const handleRandomize = () => {
         if (!currentPlayer || currentPlayer.isReady) return
-        // Shuffle full board
         const newBoard = generateBoard()
         setLocalBoard(newBoard)
-        startTransition(async () => {
-            await updateBoard(roomId, currentPlayer.id, newBoard)
-        })
+
+        const updatedPlayers = room.players.map(p =>
+            p.id === currentPlayer.id ? { ...p, board: newBoard } : p
+        )
+        const updatedRoom = {
+            ...room,
+            players: updatedPlayers,
+            version: room.version + 1,
+            lastActive: Date.now()
+        }
+        saveRoom(updatedRoom)
     }
 
     const handleClear = () => {
         if (!currentPlayer || currentPlayer.isReady) return
         const newBoard = Array(25).fill(0)
         setLocalBoard(newBoard)
-        startTransition(async () => {
-            await updateBoard(roomId, currentPlayer.id, newBoard)
-        })
+
+        const updatedPlayers = room.players.map(p =>
+            p.id === currentPlayer.id ? { ...p, board: newBoard } : p
+        )
+        const updatedRoom = {
+            ...room,
+            players: updatedPlayers,
+            version: room.version + 1,
+            lastActive: Date.now()
+        }
+        saveRoom(updatedRoom)
     }
 
     const handleToggleReady = () => {
         if (!currentPlayer || !room) return
 
-        // Optimistic UI: Update local room state immediately
-        const optimisticRoom = { ...room }
-        const pIdx = optimisticRoom.players.findIndex(p => p.id === currentPlayer.id)
-        if (pIdx !== -1) {
-            optimisticRoom.players[pIdx].isReady = !optimisticRoom.players[pIdx].isReady
-            setRoom(optimisticRoom)
+        const newBoard = localBoard || currentPlayer.board
+        if (newBoard.includes(0)) {
+            alert("Board not full")
+            return
         }
 
-        startTransition(async () => {
-            const res = await toggleReady(roomId, currentPlayer.id, localBoard || currentPlayer.board)
-            if (res && 'error' in res) {
-                alert(res.error) // Should be "Board not full"
-                // Rollback on error (the Realtime listener will eventually sync correctly anyway)
-                fetchRoom(roomId).then(r => setRoom(r || undefined))
-            }
-        })
+        const updatedPlayers = room.players.map(p =>
+            p.id === currentPlayer.id ? { ...p, isReady: !p.isReady, board: newBoard } : p
+        )
+
+        let newStatus = room.status
+        let startTime = room.startTime
+
+        if (updatedPlayers.every(p => p.isReady)) {
+            newStatus = 'starting'
+            startTime = Date.now()
+        }
+
+        const updatedRoom = {
+            ...room,
+            players: updatedPlayers,
+            status: newStatus,
+            startTime,
+            version: room.version + 1,
+            lastActive: Date.now()
+        }
+        setRoom(updatedRoom)
+        saveRoom(updatedRoom)
     }
 
     const handleRestart = () => {
-        startTransition(async () => {
-            await restartGame(roomId)
+        const updatedPlayers = room.players.map(p => {
+            if (p.id === 'bot') {
+                return { ...p, board: generateBoard(), isReady: true }
+            } else {
+                return { ...p, board: generateBoard(true), isReady: false }
+            }
         })
+
+        const updatedRoom = {
+            ...room,
+            list: [],
+            winner: null,
+            status: 'setup' as const,
+            currentPlayerIndex: 0,
+            startTime: undefined,
+            players: updatedPlayers,
+            version: room.version + 1,
+            lastActive: Date.now()
+        }
+        saveRoom(updatedRoom)
     }
 
     const handleExitDelete = async () => {
         setShowExitModal(false)
-        await deleteRoom(roomId)
+        const isBot = new URLSearchParams(window.location.search).get("bot") === "true"
+        if (isBot) {
+            sessionStorage.removeItem(`bingo_room_${roomId}`)
+        } else {
+            getBingoSocket().emit("deleteRoom", { roomId })
+        }
         router.push('/')
     }
 
     const handleExitLive = async () => {
         setShowExitModal(false)
-        if (currentPlayer) {
-            await leaveRoomLive(roomId, currentPlayer.id)
+        const isBot = new URLSearchParams(window.location.search).get("bot") === "true"
+        if (isBot) {
+            sessionStorage.removeItem(`bingo_room_${roomId}`)
+        } else {
+            if (currentPlayer) {
+                getBingoSocket().emit("leaveRoom", { roomId, playerId: currentPlayer.id })
+            }
         }
         router.push('/')
     }
@@ -434,6 +589,56 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 </div>
             )}
 
+            {/* Winner Celebration Modal */}
+            {room.status === 'finished' && (
+                <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center backdrop-blur-md p-4 animate-in fade-in duration-300">
+                    <div className="bg-white dark:bg-slate-800 p-8 rounded-3xl shadow-2xl max-w-md w-full text-center border border-slate-100 dark:border-slate-700/50 animate-in zoom-in duration-300 relative overflow-hidden">
+                        {/* Decorative floating shapes */}
+                        <div className="absolute -top-10 -left-10 w-24 h-24 bg-amber-500/10 rounded-full blur-xl animate-pulse" />
+                        <div className="absolute -bottom-10 -right-10 w-32 h-32 bg-orange-500/10 rounded-full blur-xl animate-pulse" />
+
+                        <div className="relative z-10 flex flex-col items-center">
+                            {/* Win/Loss Icon Header */}
+                            {room.winner === playerName ? (
+                                <div className="bg-amber-100 dark:bg-amber-900/50 p-5 rounded-full mb-6 relative animate-bounce [animation-duration:3s]">
+                                    <TrophyIcon className="w-16 h-16 text-amber-500 animate-pulse" />
+                                    <Sparkles className="w-6 h-6 text-amber-400 absolute top-2 right-2 animate-spin [animation-duration:6s]" />
+                                </div>
+                            ) : (
+                                <div className="bg-slate-100 dark:bg-slate-700/50 p-5 rounded-full mb-6">
+                                    <TrophyIcon className="w-16 h-16 text-slate-400 dark:text-slate-500" />
+                                </div>
+                            )}
+
+                            <h2 className="text-4xl font-extrabold tracking-tight mb-2 bg-linear-to-r from-amber-500 to-orange-600 inline-block text-transparent bg-clip-text">
+                                {room.winner === playerName ? "VICTORY! 🎉" : "GAME OVER"}
+                            </h2>
+                            
+                            <p className="text-slate-600 dark:text-slate-300 text-lg mb-6">
+                                {room.winner === playerName 
+                                    ? "Congratulations! You completed 5 lines first!"
+                                    : `${room.winner} won the game. Better luck next time!`}
+                            </p>
+
+                            <div className="flex flex-col gap-3 w-full">
+                                <button
+                                    onClick={handleRestart}
+                                    className="w-full bg-linear-to-r from-amber-500 to-orange-600 hover:from-amber-600 hover:to-orange-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-amber-500/20 active:scale-98 transition-all cursor-pointer"
+                                >
+                                    Play Again
+                                </button>
+                                <button
+                                    onClick={handleConfirmExit}
+                                    className="w-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-white font-semibold py-3 rounded-xl active:scale-98 transition-all cursor-pointer"
+                                >
+                                    Exit to Lobby
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Start Countdown Overlay */}
             {room.status === 'starting' && (
                 <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm">
@@ -446,8 +651,21 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
             <div className="w-full max-w-4xl px-4 flex flex-col sm:flex-row justify-between items-center mb-8 gap-4">
                 <div className="text-center sm:text-left">
-                    <h1 className="text-3xl font-bold text-slate-800 dark:text-white">Room: {roomId}</h1>
-                    <p className="text-slate-500 dark:text-slate-400">Player: <span className="font-semibold text-amber-600">{playerName}</span></p>
+                    <div className="flex items-center justify-center sm:justify-start gap-2.5">
+                        <h1 className="text-3xl font-bold text-slate-800 dark:text-white">Room: {roomId}</h1>
+                        <button
+                            onClick={handleCopyCode}
+                            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 transition-colors shadow-sm flex items-center justify-center group"
+                            title="Copy Room ID"
+                        >
+                            {copied ? (
+                                <Check className="w-4.5 h-4.5 text-emerald-500 animate-in zoom-in duration-100" />
+                            ) : (
+                                <Copy className="w-4.5 h-4.5 group-hover:scale-110 transition-transform" />
+                            )}
+                        </button>
+                    </div>
+                    <p className="text-slate-500 dark:text-slate-400 mt-1">Player: <span className="font-semibold text-amber-600">{playerName}</span></p>
                 </div>
                 <div className="text-right">
                     <div className={cn("text-xl font-bold px-4 py-2 rounded-full shadow-sm flex items-center gap-3",
@@ -576,7 +794,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                             className={cn(
                                                 "w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-md font-bold text-lg sm:text-xl transition-all duration-150 relative overflow-hidden",
                                                 // Status based styles
-                                                status === 'marked' ? (isWinningCell ? "bg-amber-500 text-white shadow-lg ring-2 ring-white/50" : "bg-red-500 text-white shadow-inner") :
+                                                status === 'marked' ? (isWinningCell ? "bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300/50" : "bg-red-500 text-white shadow-inner") :
                                                     status === 'empty' ? "bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600" :
                                                         "bg-amber-100 text-amber-900 border-2 border-amber-200 hover:border-amber-400 dark:bg-amber-900/50 dark:text-amber-100 dark:border-amber-800",
 
@@ -586,16 +804,10 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
                                                 // Game phase specific
                                                 room.status === 'playing' && room.players[room.currentPlayerIndex]?.name === playerName && status !== 'marked' && "hover:bg-amber-200 dark:hover:bg-amber-800 hover:scale-105 active:scale-95",
-                                                room.status === 'playing' && status !== 'marked' && room.players[room.currentPlayerIndex]?.name !== playerName && "opacity-50 grayscale",
-
-                                                // Winning animation
-                                                isWinningCell && "animate-pulse"
+                                                room.status === 'playing' && status !== 'marked' && room.players[room.currentPlayerIndex]?.name !== playerName && "opacity-50 grayscale"
                                             )}
                                         >
                                             {num !== 0 ? num : ""}
-                                            {isWinningCell && (
-                                                <div className="absolute inset-0 bg-white/20 animate-ping pointer-events-none" style={{ animationDuration: '2s' }} />
-                                            )}
                                         </button>
                                     )
                                 })}

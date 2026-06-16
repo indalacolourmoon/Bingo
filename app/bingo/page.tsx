@@ -1,16 +1,38 @@
 'use client'
 
-import { createRoom, joinRoom } from "@/actions/numbers"
 import { useRouter } from "next/navigation"
-import { useState, useTransition } from "react"
+import { useState, useEffect } from "react"
+import { getBingoSocket } from "@/lib/socket"
+import { generateBoard } from "@/lib/bingo"
 import { JoinModal } from "@/components/JoinModal"
 
 export default function BingoLobby() {
   const router = useRouter()
-  const [isPending, startTransition] = useTransition()
+  const [isPending, setIsPending] = useState(false)
+  const [isSocketConnected, setIsSocketConnected] = useState(false)
   const [roomIdToJoin, setRoomIdToJoin] = useState("")
   const [error, setError] = useState("")
   const [modalConfig, setModalConfig] = useState<{ isOpen: boolean, action: 'create' | 'join' }>({ isOpen: false, action: 'create' })
+
+  useEffect(() => {
+    const socket = getBingoSocket()
+
+    const onConnect = () => setIsSocketConnected(true)
+    const onDisconnect = () => setIsSocketConnected(false)
+
+    socket.on("connect", onConnect)
+    socket.on("disconnect", onDisconnect)
+    socket.on("connect_error", onDisconnect)
+
+    setIsSocketConnected(socket.connected)
+    socket.connect()
+
+    return () => {
+      socket.off("connect", onConnect)
+      socket.off("disconnect", onDisconnect)
+      socket.off("connect_error", onDisconnect)
+    }
+  }, [])
 
   const handleOpenJoin = () => {
     if (!roomIdToJoin.trim()) {
@@ -23,24 +45,41 @@ export default function BingoLobby() {
 
   const executeAction = (username: string) => {
     setError("")
-    startTransition(async () => {
-      if (modalConfig.action === 'create') {
-        const { roomId, playerId } = await createRoom(username)
-        localStorage.setItem(`bingo_player_${roomId}`, username)
-        localStorage.setItem(`bingo_player_id_${roomId}`, playerId)
-        router.push(`/bingo/${roomId}?player=${encodeURIComponent(username)}&playerId=${playerId}`)
-      } else {
-        const result = await joinRoom(roomIdToJoin, username)
-        if (result && 'error' in result && result.error) {
-          setError(result.error)
-          setModalConfig({ ...modalConfig, isOpen: false })
-        } else if (result && 'playerId' in result) {
-          localStorage.setItem(`bingo_player_${roomIdToJoin}`, username)
-          localStorage.setItem(`bingo_player_id_${roomIdToJoin}`, result.playerId as string)
-          router.push(`/bingo/${roomIdToJoin}?player=${encodeURIComponent(username)}&playerId=${result.playerId}`)
-        }
+    setIsPending(true)
+    const socket = getBingoSocket()
+
+    if (modalConfig.action === 'create') {
+      const roomId = Math.random().toString(36).substring(2, 8).toUpperCase()
+      const playerId = Math.random().toString(36).substring(7)
+      
+      const room = {
+        id: roomId,
+        list: [],
+        currentPlayerIndex: 0,
+        players: [{
+          id: playerId,
+          name: username,
+          board: generateBoard(true), // Start empty
+          isReady: false
+        }],
+        winner: null,
+        status: 'waiting' as const,
+        version: 1,
+        lastActive: Date.now()
       }
-    })
+
+      socket.emit("createRoom", room)
+      
+      sessionStorage.setItem(`bingo_player_${roomId}`, username)
+      sessionStorage.setItem(`bingo_player_id_${roomId}`, playerId)
+      router.push(`/bingo/${roomId}?player=${encodeURIComponent(username)}&playerId=${playerId}`)
+    } else {
+      const playerId = Math.random().toString(36).substring(7)
+      sessionStorage.setItem(`bingo_player_${roomIdToJoin}`, username)
+      sessionStorage.setItem(`bingo_player_id_${roomIdToJoin}`, playerId)
+      router.push(`/bingo/${roomIdToJoin}?player=${encodeURIComponent(username)}&playerId=${playerId}`)
+    }
+    setIsPending(false)
   }
 
   return (
@@ -52,10 +91,10 @@ export default function BingoLobby() {
         <div className="pt-2">
           <button
             onClick={() => setModalConfig({ isOpen: true, action: 'create' })}
-            disabled={isPending}
-            className="w-full bg-amber-500 hover:bg-amber-600 text-white font-bold py-3 px-4 rounded transition-colors"
+            disabled={isPending || !isSocketConnected}
+            className="w-full bg-amber-500 hover:bg-amber-600 disabled:bg-zinc-300 text-white font-bold py-3 px-4 rounded transition-colors cursor-pointer disabled:cursor-not-allowed"
           >
-            {isPending ? "Creating..." : "Create New Room"}
+            {isPending ? "Creating..." : !isSocketConnected ? "Create New Room (Server Offline)" : "Create New Room"}
           </button>
         </div>
 
@@ -70,16 +109,17 @@ export default function BingoLobby() {
           <input
             type="text"
             value={roomIdToJoin}
+            disabled={!isSocketConnected}
             onChange={e => setRoomIdToJoin(e.target.value.toUpperCase())}
-            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 p-2 border"
+            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-amber-500 focus:ring-amber-500 p-2 border disabled:bg-zinc-100 disabled:text-zinc-400"
             placeholder="e.g. X7Z9A"
           />
           <button
             onClick={handleOpenJoin}
-            disabled={isPending}
-            className="w-full bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded transition-colors"
+            disabled={isPending || !isSocketConnected}
+            className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-zinc-300 text-white font-bold py-2 px-4 rounded transition-colors cursor-pointer disabled:cursor-not-allowed"
           >
-            {isPending ? "Joining..." : "Join Private Room"}
+            {isPending ? "Joining..." : !isSocketConnected ? "Join Private Room (Server Offline)" : "Join Private Room"}
           </button>
         </div>
 

@@ -1,5 +1,3 @@
-import { supabaseAdmin as supabase } from "./supabase"
-
 export type Player = {
     id: string
     name: string
@@ -65,28 +63,47 @@ export function getWinInfo(board: number[], calledNumbers: number[]): { lineCoun
 export function checkBoardWin(board: number[], calledNumbers: number[]): boolean {
     if (board.includes(0)) return false // Incomplete board cannot win
     const { lineCount } = getWinInfo(board, calledNumbers);
-    return lineCount >= 5
+    return lineCount >= 5;
 }
 
+export function getSmartBotMove(botBoard: number[], calledNumbers: number[]): number {
+    const isMarked = (num: number) => calledNumbers.includes(num);
+    const getUnmarkedInLine = (lineIndices: number[]) => lineIndices.filter(i => !isMarked(botBoard[i])).map(i => botBoard[i]);
 
-// Helper: Increment version and Save to Supabase
-export async function updateRoom(room: Room): Promise<Room> {
-    room.version = (room.version || 0) + 1
-    room.lastActive = Date.now()
+    let bestMove: number | null = null;
+    let minNeeded = 6; // Anything > 5 means no lines found yet
 
-    // Save state to Supabase Postgres
-    // Postgres Changes on the client will handle the notification automatically
-    const { error } = await supabase
-        .from('rooms')
-        .upsert({
-            id: room.id,
-            data: room,
-            last_active: room.lastActive
-        })
+    const lines = [
+        // Rows
+        [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
+        // Cols
+        [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
+        // Diags
+        [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
+    ];
 
-    if (error) {
-        console.error("Error saving room to Supabase:", error)
+    // Find the line that needs the FEWEST numbers to finish (but > 0)
+    for (const line of lines) {
+        const unmarked = getUnmarkedInLine(line);
+        if (unmarked.length > 0 && unmarked.length < minNeeded) {
+            minNeeded = unmarked.length;
+            bestMove = unmarked[Math.floor(Math.random() * unmarked.length)]; // Random if multiple unmarked in the best line
+        } else if (unmarked.length > 0 && unmarked.length === minNeeded) {
+            // Coin flip to add variety if multiple lines are tied for best
+            if (Math.random() > 0.5) {
+                bestMove = unmarked[Math.floor(Math.random() * unmarked.length)];
+            }
+        }
     }
 
-    return room
+    // Fallback if something weird happens (e.g., all lines full but game isn't over?) -> Should never happen
+    if (bestMove === null) {
+        const remaining = botBoard.filter(n => !isMarked(n));
+        if (remaining.length > 0) {
+            return remaining[Math.floor(Math.random() * remaining.length)];
+        }
+        return 0;
+    }
+
+    return bestMove;
 }
