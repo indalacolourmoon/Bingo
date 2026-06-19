@@ -1,13 +1,15 @@
 import { useState, useEffect } from "react"
 import { X } from "lucide-react"
+import { cn } from "@/lib/utils"
 
 interface JoinModalProps {
     isOpen: boolean
     onClose: () => void
-    onConfirm: (username: string) => void
+    onConfirm: (username: string, gridSize: number) => void
     title?: string
     buttonText?: string
     isPending?: boolean
+    showModeSelector?: boolean
 }
 
 export function JoinModal({
@@ -16,14 +18,17 @@ export function JoinModal({
     onConfirm,
     title = "Join Game",
     buttonText = "Continue",
-    isPending = false
+    isPending = false,
+    showModeSelector = false
 }: JoinModalProps) {
     const [username, setUsername] = useState("")
+    const [gridSize, setGridSize] = useState<number>(5)
 
     useEffect(() => {
         if (isOpen) {
             const savedName = localStorage.getItem("bingo_username")
             if (savedName) setUsername(savedName)
+            setGridSize(5) // Default to 5 when modal opens
         }
     }, [isOpen])
 
@@ -34,7 +39,7 @@ export function JoinModal({
         const trimmed = username.trim()
         if (trimmed) {
             localStorage.setItem("bingo_username", trimmed)
-            onConfirm(trimmed)
+            onConfirm(trimmed, gridSize)
         }
     }
 
@@ -45,19 +50,20 @@ export function JoinModal({
                     <h2 className="font-bold text-zinc-800 dark:text-zinc-200">{title}</h2>
                     <button
                         onClick={onClose}
-                        className="p-1 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-500 transition-colors"
+                        className="p-1 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-500 transition-colors cursor-pointer"
                         disabled={isPending}
+                        aria-label="Close"
                     >
                         <X className="w-5 h-5" />
                     </button>
                 </div>
 
-                <form onSubmit={handleSubmit} className="p-6 space-y-4 relative">
+                <form onSubmit={handleSubmit} className="p-6 space-y-6 relative">
                     {/* Disabler overlay when pending */}
                     {isPending && <div className="absolute inset-0 bg-white/50 dark:bg-zinc-900/50 z-10 rounded-b-2xl" />}
 
-                    <div>
-                        <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300 mb-2">
+                    <div className="space-y-2">
+                        <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300">
                             Your Display Name
                         </label>
                         <input
@@ -65,16 +71,49 @@ export function JoinModal({
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             placeholder="Enter your name..."
-                            className="w-full rounded-lg border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 p-3 text-zinc-900 dark:text-white focus:border-amber-500 focus:ring-amber-500 shadow-sm"
+                            className="w-full rounded-lg border-zinc-300 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-950 p-3 text-zinc-900 dark:text-white focus:border-amber-500 focus:ring-amber-500 shadow-sm border"
                             autoFocus
                             required
                         />
                     </div>
 
+                    {showModeSelector && (
+                        <div className="space-y-2">
+                            <label className="block text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+                                Choose Game Mode
+                            </label>
+                            <div className="grid grid-cols-3 gap-2">
+                                {[
+                                    { size: 5, label: "5x5", desc: "Classic" },
+                                    { size: 6, label: "6x6", desc: "BINGOX" },
+                                    { size: 7, label: "7x7", desc: "BINGOHX" }
+                                ].map((mode) => {
+                                    const isSelected = gridSize === mode.size
+                                    return (
+                                        <button
+                                            key={mode.size}
+                                            type="button"
+                                            onClick={() => setGridSize(mode.size)}
+                                            className={cn(
+                                                "flex flex-col items-center justify-center p-3 rounded-xl border-2 transition-all cursor-pointer select-none",
+                                                isSelected 
+                                                    ? "border-amber-500 bg-amber-50/50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-100 shadow-xs scale-102 font-bold" 
+                                                    : "border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-600 dark:text-zinc-400 hover:border-zinc-300 dark:hover:border-zinc-700 hover:bg-zinc-50/50"
+                                            )}
+                                        >
+                                            <span className="font-extrabold text-base">{mode.label}</span>
+                                            <span className="text-[9px] uppercase font-bold tracking-wider opacity-85 mt-0.5">{mode.desc}</span>
+                                        </button>
+                                    )
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     <button
                         type="submit"
                         disabled={!username.trim() || isPending}
-                        className="w-full h-11 bg-amber-500 hover:bg-amber-600 disabled:bg-zinc-300 dark:disabled:bg-zinc-800 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2"
+                        className="w-full h-11 bg-amber-500 hover:bg-amber-600 disabled:bg-zinc-300 dark:disabled:bg-zinc-800 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2 cursor-pointer"
                     >
                         {isPending && (
                             <svg className="animate-spin h-5 w-5 text-white" fill="none" viewBox="0 0 24 24">

@@ -85,7 +85,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             player: {
                 id: playerId,
                 name: playerName || "Guest",
-                board: generateBoard(true),
+                board: generateBoard(5, true),
                 isReady: false
             }
         })
@@ -192,16 +192,17 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         const activePlayer = room.players[room.currentPlayerIndex]
         if (activePlayer.id === 'bot') {
             const timer = setTimeout(() => {
+                const size = room.gridSize || 5
                 const botBoard = activePlayer.board
                 const currentList = room.list
-                const move = getSmartBotMove(botBoard, currentList)
+                const move = getSmartBotMove(botBoard, currentList, size)
 
                 const newList = [...currentList, move]
                 let winner: string | null = null
                 let newStatus = room.status
 
                 for (const p of room.players) {
-                    if (checkBoardWin(p.board, newList)) {
+                    if (checkBoardWin(p.board, newList, size)) {
                         winner = p.name
                         newStatus = 'finished'
                     }
@@ -225,6 +226,29 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         }
     }, [room, roomId])
 
+    // Auto-fix player board size on client side to match the room's gridSize
+    useEffect(() => {
+        if (!room || room.status !== 'setup') return
+        const me = room.players.find((p: Player) => p.name === playerName)
+        if (!me) return
+
+        const size = room.gridSize || 5
+        const targetCells = size * size
+        if (me.board.length !== targetCells) {
+            const newBoard = Array(targetCells).fill(0)
+            const updatedPlayers = room.players.map(p =>
+                p.id === me.id ? { ...p, board: newBoard } : p
+            )
+            const updatedRoom = {
+                ...room,
+                players: updatedPlayers,
+                version: room.version + 1,
+                lastActive: Date.now()
+            }
+            saveRoom(updatedRoom)
+        }
+    }, [room, playerName])
+
     // Sync local board only once when entering setup
     useEffect(() => {
         const me = room?.players?.find((p: Player) => p.name === playerName)
@@ -232,6 +256,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             setLocalBoard(me.board)
         } else if (room?.status !== 'setup') {
             setLocalBoard(null)
+            setSelectedCell(null)
         }
     }, [room?.status, room?.players, playerName, localBoard])
 
@@ -251,11 +276,13 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         if (room?.status === 'setup') {
             const me = room?.players?.find((p: Player) => p.name === playerName)
             const board = localBoard || me?.board || []
+            const size = room?.gridSize || 5
+            const maxVal = size * size
             let next = 1
             while (board.includes(next)) next++
-            setNextNumberToPlace(next <= 25 ? next : 0)
+            setNextNumberToPlace(next <= maxVal ? next : 0)
         }
-    }, [room?.status, localBoard, room?.players, playerName])
+    }, [room?.status, localBoard, room?.players, playerName, room?.gridSize])
 
 
     if (room === undefined) return <div className="p-10 text-center dark:text-white">Connecting to Game...</div>
@@ -293,9 +320,12 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         const currentActiveBoard = localBoard || currentPlayer.board
         if (currentActiveBoard[idx] !== 0) return
 
+        const size = room?.gridSize || 5
+        const maxVal = size * size
+
         let next = 1
         while (currentActiveBoard.includes(next)) next++
-        if (next > 25) return
+        if (next > maxVal) return
 
         const newBoard = [...currentActiveBoard]
         newBoard[idx] = next
@@ -320,12 +350,13 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             const isMyTurn = room.players[room.currentPlayerIndex]?.name === playerName
             if (!isMyTurn || room.list.includes(num)) return
             
+            const size = room.gridSize || 5
             const newList = [...room.list, num]
             let winner: string | null = null
             let newStatus: 'waiting' | 'setup' | 'starting' | 'playing' | 'finished' | 'closed' = room.status
 
             for (const player of room.players) {
-                if (checkBoardWin(player.board, newList)) {
+                if (checkBoardWin(player.board, newList, size)) {
                     winner = player.name
                     newStatus = 'finished'
                 }
@@ -389,8 +420,10 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
     const handleRandomize = () => {
         if (!currentPlayer || currentPlayer.isReady) return
-        const newBoard = generateBoard()
+        const size = room?.gridSize || 5
+        const newBoard = generateBoard(size)
         setLocalBoard(newBoard)
+        setSelectedCell(null)
 
         const updatedPlayers = room.players.map(p =>
             p.id === currentPlayer.id ? { ...p, board: newBoard } : p
@@ -406,8 +439,10 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
     const handleClear = () => {
         if (!currentPlayer || currentPlayer.isReady) return
-        const newBoard = Array(25).fill(0)
+        const size = room?.gridSize || 5
+        const newBoard = Array(size * size).fill(0)
         setLocalBoard(newBoard)
+        setSelectedCell(null)
 
         const updatedPlayers = room.players.map(p =>
             p.id === currentPlayer.id ? { ...p, board: newBoard } : p
@@ -429,6 +464,8 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             alert("Board not full")
             return
         }
+
+        setSelectedCell(null)
 
         const updatedPlayers = room.players.map(p =>
             p.id === currentPlayer.id ? { ...p, isReady: !p.isReady, board: newBoard } : p
@@ -455,11 +492,13 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     }
 
     const handleRestart = () => {
+        setSelectedCell(null)
+        const size = room?.gridSize || 5
         const updatedPlayers = room.players.map(p => {
             if (p.id === 'bot') {
-                return { ...p, board: generateBoard(), isReady: true }
+                return { ...p, board: generateBoard(size), isReady: true }
             } else {
-                return { ...p, board: generateBoard(true), isReady: false }
+                return { ...p, board: generateBoard(size, true), isReady: false }
             }
         })
 
@@ -616,7 +655,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                             
                             <p className="text-slate-600 dark:text-slate-300 text-lg mb-6">
                                 {room.winner === playerName 
-                                    ? "Congratulations! You completed 5 lines first!"
+                                    ? `Congratulations! You completed ${room.gridSize || 5} lines first!`
                                     : `${room.winner} won the game. Better luck next time!`}
                             </p>
 
@@ -743,20 +782,25 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                             <div className="flex justify-between w-full items-center px-2">
                                 <span className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Progress</span>
                                 <span className="text-sm font-bold text-amber-600 bg-amber-50 dark:bg-amber-900/30 px-2 py-0.5 rounded">
-                                    {getWinInfo(currentPlayer.board, room.list).lineCount} / 5 Lines
+                                    {getWinInfo(currentPlayer.board, room.list, room.gridSize || 5).lineCount} / {room.gridSize || 5} Lines
                                 </span>
                             </div>
 
                             {/* B-I-N-G-O Letters */}
-                            <div className="flex gap-2">
-                                {['B', 'I', 'N', 'G', 'O'].map((letter, i) => {
-                                    const { lineCount } = getWinInfo(currentPlayer.board, room.list);
+                            <div className="flex gap-1.5 sm:gap-2">
+                                {(room.gridSize === 6 ? ['B', 'I', 'N', 'G', 'O', 'X'] : room.gridSize === 7 ? ['B', 'I', 'N', 'G', 'O', 'H', 'X'] : ['B', 'I', 'N', 'G', 'O']).map((letter, i) => {
+                                    const { lineCount } = getWinInfo(currentPlayer.board, room.list, room.gridSize || 5);
                                     const isLit = lineCount > i;
                                     return (
                                         <div
                                             key={letter}
                                             className={cn(
-                                                "w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center rounded-lg font-black text-xl sm:text-2xl transition-all duration-500 shadow-sm border-2",
+                                                "flex items-center justify-center rounded-lg font-black transition-all duration-500 shadow-sm border-2",
+                                                room.gridSize === 7 
+                                                    ? "w-8 h-8 sm:w-10 sm:h-10 text-base sm:text-lg"
+                                                    : room.gridSize === 6
+                                                        ? "w-9 h-9 sm:w-11 sm:h-11 text-lg sm:text-xl"
+                                                        : "w-10 h-10 sm:w-12 sm:h-12 text-xl sm:text-2xl",
                                                 isLit
                                                     ? "bg-amber-500 text-white border-amber-400 scale-110 shadow-amber-500/50 animate-bounce-short"
                                                     : "bg-slate-100 text-slate-300 border-slate-200 dark:bg-slate-700 dark:text-slate-600 dark:border-slate-600"
@@ -774,11 +818,14 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                 <User className="w-5 h-5 text-blue-500" />
                                 Your Board
                             </h2>
-                            <div className="grid grid-cols-5 gap-2 select-none touch-none">
+                            <div className={cn(
+                                "grid gap-1.5 sm:gap-2 select-none touch-none",
+                                room.gridSize === 6 ? "grid-cols-6" : room.gridSize === 7 ? "grid-cols-7" : "grid-cols-5"
+                            )}>
                                 {(activeBoard || []).map((num: number, idx: number) => {
                                     const status = getCellStatus(num)
                                     const isSelected = selectedCell === idx
-                                    const { winningIndices } = getWinInfo(currentPlayer.board, room.list)
+                                    const { winningIndices } = getWinInfo(currentPlayer.board, room.list, room.gridSize || 5)
                                     const isWinningCell = winningIndices.has(idx)
 
                                     return (
@@ -792,7 +839,13 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                             onPointerDown={(e) => onPointerDown(e, idx, num)}
                                             onPointerEnter={() => onPointerEnter(idx, num)}
                                             className={cn(
-                                                "w-12 h-12 sm:w-14 sm:h-14 flex items-center justify-center rounded-md font-bold text-lg sm:text-xl transition-all duration-150 relative overflow-hidden",
+                                                "flex items-center justify-center rounded-md font-bold transition-all duration-150 relative overflow-hidden",
+                                                // Dynamic sizing based on grid size
+                                                room.gridSize === 7 
+                                                    ? "w-8.5 h-8.5 sm:w-11 sm:h-11 text-sm sm:text-base animate-in zoom-in-95" 
+                                                    : room.gridSize === 6 
+                                                        ? "w-10 h-10 sm:w-12 sm:h-12 text-base sm:text-lg animate-in zoom-in-95" 
+                                                        : "w-12 h-12 sm:w-14 sm:h-14 text-lg sm:text-xl animate-in zoom-in-95",
                                                 // Status based styles
                                                 status === 'marked' ? (isWinningCell ? "bg-emerald-600 text-white shadow-md ring-2 ring-emerald-300/50" : "bg-red-500 text-white shadow-inner") :
                                                     status === 'empty' ? "bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-400 border-2 border-dashed border-slate-300 dark:border-slate-600" :
@@ -800,7 +853,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
                                                 // Setup phase specific
                                                 room.status === 'setup' && !currentPlayer.isReady && "cursor-pointer",
-                                                isSelected && "ring-4 ring-blue-500 z-10 scale-110 bg-blue-100 dark:bg-blue-900",
+                                                room.status === 'setup' && isSelected && "ring-4 ring-blue-500 z-10 scale-110 bg-blue-100 dark:bg-blue-900",
 
                                                 // Game phase specific
                                                 room.status === 'playing' && room.players[room.currentPlayerIndex]?.name === playerName && status !== 'marked' && "hover:bg-amber-200 dark:hover:bg-amber-800 hover:scale-105 active:scale-95",
@@ -838,15 +891,15 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                         ) : (
                                             <div className="flex flex-col items-end gap-1">
                                                 <span className="text-[10px] font-bold text-amber-600 uppercase">
-                                                    {getWinInfo(opponent.board, room.list).lineCount}/5 Lines
+                                                    {getWinInfo(opponent.board, room.list, room.gridSize || 5).lineCount}/{room.gridSize || 5} Lines
                                                 </span>
                                                 <div className="flex gap-0.5 mt-0.5">
-                                                    {['B', 'I', 'N', 'G', 'O'].map((l, i) => (
+                                                    {(room.gridSize === 6 ? ['B', 'I', 'N', 'G', 'O', 'X'] : room.gridSize === 7 ? ['B', 'I', 'N', 'G', 'O', 'H', 'X'] : ['B', 'I', 'N', 'G', 'O']).map((l, i) => (
                                                         <div
                                                             key={l}
                                                             className={cn(
-                                                                "w-4 h-4 flex items-center justify-center rounded-[2px] text-[8px] font-black transition-all duration-300",
-                                                                getWinInfo(opponent.board, room.list).lineCount > i
+                                                                "w-3.5 h-3.5 sm:w-4 sm:h-4 flex items-center justify-center rounded-[2px] text-[8px] font-black transition-all duration-300",
+                                                                getWinInfo(opponent.board, room.list, room.gridSize || 5).lineCount > i
                                                                     ? "bg-amber-500 text-white shadow-sm"
                                                                     : "bg-slate-100 text-slate-300 dark:bg-slate-700 dark:text-slate-500"
                                                             )}

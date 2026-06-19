@@ -81,7 +81,7 @@ export default function Home() {
     }
   }, [])
 
-  const executeJoin = (username: string) => {
+  const executeJoin = (username: string, gridSize: number = 5) => {
     setError("")
     setIsPending(true)
     let targetRoomId = modalConfig.roomId
@@ -106,14 +106,15 @@ export default function Home() {
         list: [],
         currentPlayerIndex: 0,
         players: [
-          { id: playerId, name: username, board: generateBoard(true), isReady: false },
-          { id: 'bot', name: "Computer", board: generateBoard(), isReady: true }
+          { id: playerId, name: username, board: generateBoard(gridSize, true), isReady: false },
+          { id: 'bot', name: "Computer", board: generateBoard(gridSize), isReady: true }
         ],
         winner: null,
         status: 'setup' as const,
         version: 1,
         lastActive: Date.now(),
-        isBotMatch: true
+        isBotMatch: true,
+        gridSize: gridSize
       }
       
       // Save locally (does not touch socket)
@@ -206,10 +207,15 @@ export default function Home() {
                     }`}
                   >
                     <div>
-                      <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                        {r.host && r.host !== 'Unknown' ? `${r.host}'s Room` : `Room ${r.id}`}
-                      </span>
-                      <span className="ml-2 text-xs text-zinc-500 dark:text-zinc-500 bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded-full">{r.playerCount}/2 Players</span>
+                      <div className="flex items-center flex-wrap gap-1.5">
+                        <span className="font-medium text-zinc-800 dark:text-zinc-200">
+                          {r.host && r.host !== 'Unknown' ? `${r.host}'s Room` : `Room ${r.id}`}
+                        </span>
+                        <span className="text-xs text-zinc-500 dark:text-zinc-500 bg-zinc-200 dark:bg-zinc-800 px-2 py-0.5 rounded-full">{r.playerCount}/2 Players</span>
+                        <span className="text-[10px] text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200/40 dark:border-amber-900/40 px-1.5 py-0.5 rounded-full font-bold">
+                          {(r as any).gridSize === 6 ? "6x6 BINGOX" : (r as any).gridSize === 7 ? "7x7 BINGOHX" : "5x5 Classic"}
+                        </span>
+                      </div>
                     </div>
                     <div className="flex items-center gap-3">
                       {r.playerCount === 0 && <RoomCountdown lastActive={r.lastActive} />}
@@ -231,6 +237,7 @@ export default function Home() {
           title={modalConfig.type === 'random' ? "Join Random Room" : modalConfig.type === 'bot' ? "Play vs Computer" : "Join Room"}
           buttonText={modalConfig.type === 'bot' ? "Start Game" : "Join Game"}
           isPending={isPending}
+          showModeSelector={modalConfig.type === 'bot'}
         />
 
       </main>
