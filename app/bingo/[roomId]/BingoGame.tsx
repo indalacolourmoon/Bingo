@@ -177,10 +177,12 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
         if (!currentPlayer || !opponent) return
 
+        const pendingSignals: { type: 'offer' | 'answer' | 'candidate' | 'mute'; sdp?: string; candidate?: Record<string, unknown> | null; isMuted?: boolean }[] = []
+
         const initWebRtc = async () => {
             try {
                 console.log("Initializing WebRTC Voice Chat...")
-
+                
                 let stream: MediaStream
                 try {
                     stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -188,7 +190,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                     console.warn("Microphone access denied or unavailable:", mediaErr)
                     return
                 }
-
+                
                 localStreamRef.current = stream
                 stream.getAudioTracks().forEach(track => {
                     track.enabled = !isMuted
@@ -242,6 +244,38 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                         signal: { type: "offer", sdp: offer.sdp }
                     })
                 }
+
+                const processPending = async () => {
+                    const currentPc = peerConnectionRef.current
+                    if (!currentPc) return
+                    while (pendingSignals.length > 0) {
+                        const sig = pendingSignals.shift()
+                        if (!sig) continue
+                        try {
+                            if (sig.type === "offer" && sig.sdp) {
+                                console.log("Processing queued offer...")
+                                await currentPc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: sig.sdp }))
+                                const answer = await currentPc.createAnswer()
+                                await currentPc.setLocalDescription(answer)
+                                socket.emit("webrtcSignal", {
+                                    roomId,
+                                    signal: { type: "answer", sdp: answer.sdp }
+                                })
+                            } else if (sig.type === "answer" && sig.sdp) {
+                                console.log("Processing queued answer...")
+                                await currentPc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: sig.sdp }))
+                            } else if (sig.type === "candidate" && sig.candidate) {
+                                console.log("Processing queued ICE candidate...")
+                                const candInit = sig.candidate as unknown as RTCIceCandidateInit
+                                await currentPc.addIceCandidate(new RTCIceCandidate(candInit))
+                            }
+                        } catch (err: unknown) {
+                            console.error("Error processing queued signal:", err)
+                        }
+                    }
+                }
+                await processPending()
+
             } catch (err: unknown) {
                 console.error("Failed to initialize WebRTC:", err)
             }
@@ -256,7 +290,13 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             }
 
             const pc = peerConnectionRef.current
-            if (!pc) return
+            if (!pc) {
+                if (signal.type === "offer" || signal.type === "answer" || signal.type === "candidate") {
+                    console.log("Queueing signal because peerConnection is not initialized yet:", signal.type)
+                    pendingSignals.push(signal)
+                }
+                return
+            }
 
             try {
                 if (signal.type === "offer" && signal.sdp) {
