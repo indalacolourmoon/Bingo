@@ -43,7 +43,7 @@ export default function BingoLobby() {
     setModalConfig({ isOpen: true, action: 'join' })
   }
 
-  const executeAction = (username: string) => {
+  const executeAction = (username: string, gridSize: number = 5) => {
     setError("")
     setIsPending(true)
     const socket = getBingoSocket()
@@ -59,13 +59,14 @@ export default function BingoLobby() {
         players: [{
           id: playerId,
           name: username,
-          board: generateBoard(true), // Start empty
+          board: generateBoard(gridSize, true), // Start empty
           isReady: false
         }],
         winner: null,
         status: 'waiting' as const,
         version: 1,
-        lastActive: Date.now()
+        lastActive: Date.now(),
+        gridSize: gridSize
       }
 
       socket.emit("createRoom", room)
@@ -135,6 +136,7 @@ export default function BingoLobby() {
         title={modalConfig.action === 'create' ? "Create New Room" : "Join Private Room"}
         buttonText={modalConfig.action === 'create' ? "Create" : "Join"}
         isPending={isPending}
+        showModeSelector={modalConfig.action === 'create'}
       />
     </div>
   )

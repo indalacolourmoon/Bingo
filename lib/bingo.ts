@@ -16,15 +16,56 @@ export type Room = {
     version: number // For long polling / SSE
     lastActive: number // To track idle rooms
     isBotMatch?: boolean
+    gridSize?: number // 5 (default), 6, or 7
 }
 
 // Removed globalThis in-memory state
 // We now rely solely on Supabase Postgres
 
-// Helper: Generate a random Bingo board (1-25 shuffled) or empty
-export function generateBoard(empty: boolean = false): number[] {
-    if (empty) return Array(25).fill(0)
-    const numbers = Array.from({ length: 25 }, (_, i) => i + 1)
+// Helper: Get winning lines (rows, cols, diagonals) dynamically based on size
+export function getLinesForSize(size: number): number[][] {
+    const lines: number[][] = []
+    
+    // Rows
+    for (let r = 0; r < size; r++) {
+        const row: number[] = []
+        for (let c = 0; c < size; c++) {
+            row.push(r * size + c)
+        }
+        lines.push(row)
+    }
+    
+    // Cols
+    for (let c = 0; c < size; c++) {
+        const col: number[] = []
+        for (let r = 0; r < size; r++) {
+            col.push(r * size + c)
+        }
+        lines.push(col)
+    }
+    
+    // Diagonal 1 (Top-Left to Bottom-Right)
+    const diag1: number[] = []
+    for (let i = 0; i < size; i++) {
+        diag1.push(i * size + i)
+    }
+    lines.push(diag1)
+    
+    // Diagonal 2 (Top-Right to Bottom-Left)
+    const diag2: number[] = []
+    for (let i = 0; i < size; i++) {
+        diag2.push(i * size + (size - 1 - i))
+    }
+    lines.push(diag2)
+    
+    return lines
+}
+
+// Helper: Generate a random Bingo board (1 to size*size shuffled) or empty
+export function generateBoard(size: number = 5, empty: boolean = false): number[] {
+    const totalCells = size * size
+    if (empty) return Array(totalCells).fill(0)
+    const numbers = Array.from({ length: totalCells }, (_, i) => i + 1)
     for (let i = numbers.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [numbers[i], numbers[j]] = [numbers[j], numbers[i]];
@@ -33,21 +74,15 @@ export function generateBoard(empty: boolean = false): number[] {
 }
 
 // Helper: Get detailed win information (completed lines and specific indices)
-export function getWinInfo(board: number[], calledNumbers: number[]): { lineCount: number, winningIndices: Set<number> } {
-    if (!board || board.length !== 25) return { lineCount: 0, winningIndices: new Set() }
+export function getWinInfo(board: number[], calledNumbers: number[], size: number = 5): { lineCount: number, winningIndices: Set<number> } {
+    const totalCells = size * size
+    if (!board || board.length !== totalCells) return { lineCount: 0, winningIndices: new Set() }
 
     const isMarked = (i: number) => calledNumbers.includes(board[i])
     const winningIndices = new Set<number>();
     let lineCount = 0;
 
-    const lines = [
-        // Rows
-        [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
-        // Cols
-        [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
-        // Diagonals
-        [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
-    ];
+    const lines = getLinesForSize(size)
 
     for (const line of lines) {
         if (line.every(idx => isMarked(idx))) {
@@ -59,28 +94,21 @@ export function getWinInfo(board: number[], calledNumbers: number[]): { lineCoun
     return { lineCount, winningIndices };
 }
 
-// Helper: Check for a win (Requires 5 completed lines)
-export function checkBoardWin(board: number[], calledNumbers: number[]): boolean {
+// Helper: Check for a win (Requires size completed lines)
+export function checkBoardWin(board: number[], calledNumbers: number[], size: number = 5): boolean {
     if (board.includes(0)) return false // Incomplete board cannot win
-    const { lineCount } = getWinInfo(board, calledNumbers);
-    return lineCount >= 5;
+    const { lineCount } = getWinInfo(board, calledNumbers, size);
+    return lineCount >= size;
 }
 
-export function getSmartBotMove(botBoard: number[], calledNumbers: number[]): number {
+export function getSmartBotMove(botBoard: number[], calledNumbers: number[], size: number = 5): number {
     const isMarked = (num: number) => calledNumbers.includes(num);
     const getUnmarkedInLine = (lineIndices: number[]) => lineIndices.filter(i => !isMarked(botBoard[i])).map(i => botBoard[i]);
 
     let bestMove: number | null = null;
-    let minNeeded = 6; // Anything > 5 means no lines found yet
+    let minNeeded = size + 1; // Anything > size means no lines found yet
 
-    const lines = [
-        // Rows
-        [0, 1, 2, 3, 4], [5, 6, 7, 8, 9], [10, 11, 12, 13, 14], [15, 16, 17, 18, 19], [20, 21, 22, 23, 24],
-        // Cols
-        [0, 5, 10, 15, 20], [1, 6, 11, 16, 21], [2, 7, 12, 17, 22], [3, 8, 13, 18, 23], [4, 9, 14, 19, 24],
-        // Diags
-        [0, 6, 12, 18, 24], [4, 8, 12, 16, 20]
-    ];
+    const lines = getLinesForSize(size);
 
     // Find the line that needs the FEWEST numbers to finish (but > 0)
     for (const line of lines) {
