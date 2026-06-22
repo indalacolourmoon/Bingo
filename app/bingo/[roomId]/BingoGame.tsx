@@ -381,11 +381,19 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 let winner: string | null = null
                 let newStatus = room.status
 
+                const winners: string[] = []
                 for (const p of room.players) {
                     if (checkBoardWin(p.board, newList, size)) {
-                        winner = p.name
-                        newStatus = 'finished'
+                        winners.push(p.name)
                     }
+                }
+
+                if (winners.length > 1) {
+                    winner = "draw"
+                    newStatus = 'finished'
+                } else if (winners.length === 1) {
+                    winner = winners[0]
+                    newStatus = 'finished'
                 }
 
                 const nextPlayerIndex = room.currentPlayerIndex === 0 ? 1 : 0
@@ -535,11 +543,19 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             let winner: string | null = null
             let newStatus: 'waiting' | 'setup' | 'starting' | 'playing' | 'finished' | 'closed' = room.status
 
+            const winners: string[] = []
             for (const player of room.players) {
                 if (checkBoardWin(player.board, newList, size)) {
-                    winner = player.name
-                    newStatus = 'finished'
+                    winners.push(player.name)
                 }
+            }
+
+            if (winners.length > 1) {
+                winner = "draw"
+                newStatus = 'finished'
+            } else if (winners.length === 1) {
+                winner = winners[0]
+                newStatus = 'finished'
             }
 
             const nextPlayerIndex = (room.currentPlayerIndex + 1) % room.players.length
@@ -817,8 +833,12 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                         <div className="absolute -bottom-10 -right-10 w-32 h-32 bg-orange-500/10 rounded-full blur-xl animate-pulse" />
 
                         <div className="relative z-10 flex flex-col items-center">
-                            {/* Win/Loss Icon Header */}
-                            {room.winner === playerName ? (
+                            {/* Win/Loss/Draw Icon Header */}
+                            {room.winner === "draw" ? (
+                                <div className="bg-blue-100 dark:bg-blue-900/50 p-5 rounded-full mb-6">
+                                    <TrophyIcon className="w-16 h-16 text-blue-500" />
+                                </div>
+                            ) : room.winner === playerName ? (
                                 <div className="bg-amber-100 dark:bg-amber-900/50 p-5 rounded-full mb-6 relative animate-bounce [animation-duration:3s]">
                                     <TrophyIcon className="w-16 h-16 text-amber-500 animate-pulse" />
                                     <Sparkles className="w-6 h-6 text-amber-400 absolute top-2 right-2 animate-spin [animation-duration:6s]" />
@@ -830,13 +850,15 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                             )}
 
                             <h2 className="text-4xl font-extrabold tracking-tight mb-2 bg-linear-to-r from-amber-500 to-orange-600 inline-block text-transparent bg-clip-text">
-                                {room.winner === playerName ? "VICTORY! 🎉" : "GAME OVER"}
+                                {room.winner === "draw" ? "IT'S A DRAW! 🤝" : room.winner === playerName ? "VICTORY! 🎉" : "GAME OVER"}
                             </h2>
 
                             <p className="text-slate-600 dark:text-slate-300 text-lg mb-6">
-                                {room.winner === playerName
-                                    ? `Congratulations! You completed ${room.gridSize || 5} lines first!`
-                                    : `${room.winner} won the game. Better luck next time!`}
+                                {room.winner === "draw"
+                                    ? `Both players completed ${room.gridSize || 5} lines at the same time!`
+                                    : room.winner === playerName
+                                        ? `Congratulations! You completed ${room.gridSize || 5} lines first!`
+                                        : `${room.winner} won the game. Better luck next time!`}
                             </p>
 
                             <div className="flex flex-col gap-3 w-full">
@@ -1151,8 +1173,8 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
                     {room.status === 'finished' && (
                         <div className="bg-amber-100 dark:bg-amber-900 border-l-4 border-amber-500 text-amber-700 dark:text-amber-100 p-4 rounded" role="alert">
-                            <p className="font-bold">Winner!</p>
-                            <p>{room.winner} has won the game!</p>
+                            <p className="font-bold">{room.winner === "draw" ? "It's a Draw!" : "Winner!"}</p>
+                            <p>{room.winner === "draw" ? "Both players completed their lines simultaneously!" : `${room.winner} has won the game!`}</p>
                             <button
                                 onClick={handleRestart}
                                 className="mt-2 bg-amber-500 text-white px-3 py-1 rounded hover:bg-amber-600 text-sm shadow-sm transition-colors"
