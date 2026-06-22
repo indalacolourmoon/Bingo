@@ -32,10 +32,20 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     const [isMuted, setIsMuted] = useState(false)
     const [opponentMuted, setOpponentMuted] = useState(false)
     const [voiceConnected, setVoiceConnected] = useState(false)
+    const [isSpeaking, setIsSpeaking] = useState(false)
+    const [opponentSpeaking, setOpponentSpeaking] = useState(false)
 
     const localStreamRef = useRef<MediaStream | null>(null)
     const peerConnectionRef = useRef<RTCPeerConnection | null>(null)
     const remoteAudioRef = useRef<HTMLAudioElement | null>(null)
+    const isMutedRef = useRef(false)
+    const audioContextRef = useRef<AudioContext | null>(null)
+    const speakTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+    // Keep isMutedRef in sync for speaking detection closure
+    useEffect(() => {
+        isMutedRef.current = isMuted
+    }, [isMuted])
 
     const handleCopyCode = async () => {
         try {
@@ -146,6 +156,14 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     }, [roomId, playerName])
 
     const cleanupWebRtc = () => {
+        if (speakTimerRef.current) {
+            clearTimeout(speakTimerRef.current)
+            speakTimerRef.current = null
+        }
+        if (audioContextRef.current) {
+            audioContextRef.current.close()
+            audioContextRef.current = null
+        }
         if (localStreamRef.current) {
             localStreamRef.current.getTracks().forEach(track => track.stop())
             localStreamRef.current = null
@@ -156,6 +174,8 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
         }
         setVoiceConnected(false)
         setOpponentMuted(false)
+        setIsSpeaking(false)
+        setOpponentSpeaking(false)
     }
 
     // --- WebRTC Voice Connection ---
@@ -177,7 +197,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
 
         if (!currentPlayer || !opponent) return
 
-        const pendingSignals: { type: 'offer' | 'answer' | 'candidate' | 'mute'; sdp?: string; candidate?: Record<string, unknown> | null; isMuted?: boolean }[] = []
+        const pendingSignals: { type: 'offer' | 'answer' | 'candidate' | 'mute' | 'speaking'; sdp?: string; candidate?: Record<string, unknown> | null; isMuted?: boolean; isSpeaking?: boolean }[] = []
 
         const initWebRtc = async () => {
             try {
@@ -185,7 +205,13 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 
                 let stream: MediaStream
                 try {
-                    stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+                    stream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                })
                 } catch (mediaErr: unknown) {
                     console.warn("Microphone access denied or unavailable:", mediaErr)
                     return
@@ -200,6 +226,56 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                     roomId,
                     signal: { type: "mute", isMuted }
                 })
+
+                // Set up speaking detection via AudioContext AnalyserNode
+                let wasSpeaking = false
+                try {
+                    const audioContext = new AudioContext()
+                    audioContextRef.current = audioContext
+                    const source = audioContext.createMediaStreamSource(stream)
+                    const analyser = audioContext.createAnalyser()
+                    analyser.fftSize = 256
+                    const bufferLength = analyser.frequencyBinCount
+                    const dataArray = new Uint8Array(bufferLength)
+                    source.connect(analyser)
+
+                    const checkSpeaking = () => {
+                        if (!peerConnectionRef.current) return
+
+                        if (isMutedRef.current) {
+                            setIsSpeaking(false)
+                            if (wasSpeaking) {
+                                wasSpeaking = false
+                                socket.emit("webrtcSignal", {
+                                    roomId,
+                                    signal: { type: "speaking", isSpeaking: false }
+                                })
+                            }
+                            speakTimerRef.current = setTimeout(checkSpeaking, 500)
+                            return
+                        }
+
+                        analyser.getByteFrequencyData(dataArray)
+                        const avg = dataArray.reduce((a, b) => a + b, 0) / bufferLength
+                        const speaking = avg > 15
+
+                        setIsSpeaking(speaking)
+
+                        if (speaking !== wasSpeaking) {
+                            wasSpeaking = speaking
+                            socket.emit("webrtcSignal", {
+                                roomId,
+                                signal: { type: "speaking", isSpeaking: speaking }
+                            })
+                        }
+
+                        speakTimerRef.current = setTimeout(checkSpeaking, 300)
+                    }
+
+                    speakTimerRef.current = setTimeout(checkSpeaking, 1000)
+                } catch (err) {
+                    console.warn("Failed to set up speaking detection:", err)
+                }
 
                 const pc = new RTCPeerConnection({
                     iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
@@ -281,11 +357,16 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
             }
         }
 
-        const handleSignal = async (payload: { signal: { type: 'offer' | 'answer' | 'candidate' | 'mute'; sdp?: string; candidate?: Record<string, unknown> | null; isMuted?: boolean } }) => {
+        const handleSignal = async (payload: { signal: { type: 'offer' | 'answer' | 'candidate' | 'mute' | 'speaking'; sdp?: string; candidate?: Record<string, unknown> | null; isMuted?: boolean; isSpeaking?: boolean } }) => {
             const { signal } = payload
 
             if (signal.type === "mute") {
                 setOpponentMuted(!!signal.isMuted)
+                return
+            }
+
+            if (signal.type === "speaking") {
+                setOpponentSpeaking(!!signal.isSpeaking)
                 return
             }
 
@@ -343,10 +424,19 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 track.enabled = !nextMute
             })
         }
-        getBingoSocket().emit("webrtcSignal", {
+        const socket = getBingoSocket()
+        socket.emit("webrtcSignal", {
             roomId,
             signal: { type: "mute", isMuted: nextMute }
         })
+        // If muting, immediately signal we stopped speaking
+        if (nextMute) {
+            setIsSpeaking(false)
+            socket.emit("webrtcSignal", {
+                roomId,
+                signal: { type: "speaking", isSpeaking: false }
+            })
+        }
     }
 
     // Handle BeforeUnload & Closed Room Redirects & Back Button
@@ -955,9 +1045,11 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                     "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 border cursor-pointer select-none",
                                     isMuted
                                         ? "bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/40 dark:border-rose-900/40 dark:text-rose-400"
-                                        : voiceConnected
-                                            ? "bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:border-emerald-900/40 dark:text-emerald-400 animate-pulse"
-                                            : "bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/40 dark:border-blue-900/40 dark:text-blue-400"
+                                        : voiceConnected && isSpeaking
+                                            ? "bg-emerald-50 border-emerald-200 text-emerald-600 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:border-emerald-900/40 dark:text-emerald-400"
+                                            : voiceConnected
+                                                ? "bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/40 dark:border-blue-900/40 dark:text-blue-400"
+                                                : "bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/40 dark:border-blue-900/40 dark:text-blue-400 animate-pulse"
                                 )}
                             >
                                 {isMuted ? (
@@ -965,10 +1057,20 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                         <MicOff className="w-3.5 h-3.5" />
                                         <span>Muted</span>
                                     </>
+                                ) : voiceConnected && isSpeaking ? (
+                                    <>
+                                        <Mic className="w-3.5 h-3.5 text-emerald-500" />
+                                        <span className="text-emerald-600 dark:text-emerald-400">Speaking...</span>
+                                    </>
+                                ) : voiceConnected ? (
+                                    <>
+                                        <Mic className="w-3.5 h-3.5" />
+                                        <span>Connected</span>
+                                    </>
                                 ) : (
                                     <>
                                         <Mic className="w-3.5 h-3.5" />
-                                        <span>{voiceConnected ? "Voice Connected" : "Connecting Voice..."}</span>
+                                        <span>Connecting Voice...</span>
                                     </>
                                 )}
                             </button>
@@ -1154,12 +1256,22 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                     <div className="flex justify-between text-sm items-center">
                                         <div className="flex items-center gap-1.5">
                                             <span className="font-semibold text-gray-700 dark:text-slate-200">{opponent.name}</span>
-                                            {opponentMuted && (
+                                            {opponentMuted ? (
                                                 <span className="text-rose-500 dark:text-rose-400 flex items-center gap-0.5" title="Opponent is muted">
-                                                    <MicOff className="w-3 h-3 animate-in fade-in zoom-in" />
+                                                    <MicOff className="w-3 h-3" />
                                                     <span className="text-[9px] font-black uppercase">Muted</span>
                                                 </span>
-                                            )}
+                                            ) : opponentSpeaking ? (
+                                                <span className="text-emerald-500 dark:text-emerald-400 flex items-center gap-0.5 animate-pulse" title="Opponent is speaking">
+                                                    <Mic className="w-3 h-3" />
+                                                    <span className="text-[9px] font-black uppercase">Speaking...</span>
+                                                </span>
+                                            ) : voiceConnected ? (
+                                                <span className="text-blue-500 dark:text-blue-400 flex items-center gap-0.5" title="Opponent is listening">
+                                                    <Mic className="w-3 h-3" />
+                                                    <span className="text-[9px] font-black uppercase">Listening</span>
+                                                </span>
+                                            ) : null}
                                         </div>
                                         {room.status === 'setup' ? (
                                             <span className={cn("text-xs px-2 py-0.5 rounded-full transition-colors", opponent.isReady ? "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200" : "bg-gray-100 text-gray-500 dark:bg-slate-700 dark:text-slate-400")}>
