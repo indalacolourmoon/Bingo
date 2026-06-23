@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { useEffect, useState, useRef } from "react"
 import { Room, Player, generateBoard, getWinInfo, checkBoardWin, getSmartBotMove } from "@/lib/bingo"
 import { getBingoSocket } from "@/lib/socket"
-import { Check, Copy, RefreshCw, Trophy, User, X, Home, Bot, Trophy as TrophyIcon, Sparkles, Mic, MicOff } from "lucide-react"
+import { Check, Copy, RefreshCw, Trophy, User, X, Home, Bot, Trophy as TrophyIcon, Sparkles, Mic, MicOff, Volume2, VolumeX } from "lucide-react"
 
 type BingoGameProps = {
     roomId: string
@@ -30,6 +30,7 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
     const [copied, setCopied] = useState(false)
 
     const [isMuted, setIsMuted] = useState(false)
+    const [speakerOn, setSpeakerOn] = useState(true)
     const [opponentMuted, setOpponentMuted] = useState(false)
     const [voiceConnected, setVoiceConnected] = useState(false)
     const [isSpeaking, setIsSpeaking] = useState(false)
@@ -436,6 +437,14 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                 roomId,
                 signal: { type: "speaking", isSpeaking: false }
             })
+        }
+    }
+
+    const handleToggleSpeaker = () => {
+        const next = !speakerOn
+        setSpeakerOn(next)
+        if (remoteAudioRef.current) {
+            remoteAudioRef.current.muted = !next
         }
     }
 
@@ -1039,10 +1048,12 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                     <p className="text-slate-500 dark:text-slate-400 mt-1">Player: <span className="font-semibold text-amber-600">{playerName}</span></p>
                     {room.players.length === 2 && !room.isBotMatch && (
                         <div className="flex items-center justify-center sm:justify-start gap-2 mt-2">
+                            {/* Mic toggle */}
                             <button
                                 onClick={handleToggleMute}
+                                title={isMuted ? "Unmute microphone" : "Mute microphone"}
                                 className={cn(
-                                    "flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all duration-200 border cursor-pointer select-none",
+                                    "flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 border cursor-pointer select-none",
                                     isMuted
                                         ? "bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/40 dark:border-rose-900/40 dark:text-rose-400"
                                         : voiceConnected && isSpeaking
@@ -1053,26 +1064,25 @@ export default function BingoGame({ roomId, playerName }: BingoGameProps) {
                                 )}
                             >
                                 {isMuted ? (
-                                    <>
-                                        <MicOff className="w-3.5 h-3.5" />
-                                        <span>Muted</span>
-                                    </>
+                                    <MicOff className="w-4 h-4" />
                                 ) : voiceConnected && isSpeaking ? (
-                                    <>
-                                        <Mic className="w-3.5 h-3.5 text-emerald-500" />
-                                        <span className="text-emerald-600 dark:text-emerald-400">Speaking...</span>
-                                    </>
-                                ) : voiceConnected ? (
-                                    <>
-                                        <Mic className="w-3.5 h-3.5" />
-                                        <span>Connected</span>
-                                    </>
+                                    <Mic className="w-4 h-4 text-emerald-500" />
                                 ) : (
-                                    <>
-                                        <Mic className="w-3.5 h-3.5" />
-                                        <span>Connecting Voice...</span>
-                                    </>
+                                    <Mic className="w-4 h-4" />
                                 )}
+                            </button>
+                            {/* Speaker toggle */}
+                            <button
+                                onClick={handleToggleSpeaker}
+                                title={speakerOn ? "Mute audio output" : "Unmute audio output"}
+                                className={cn(
+                                    "flex items-center justify-center w-9 h-9 rounded-lg transition-all duration-200 border cursor-pointer select-none",
+                                    speakerOn
+                                        ? "bg-blue-50 border-blue-200 text-blue-600 hover:bg-blue-100 dark:bg-blue-950/40 dark:border-blue-900/40 dark:text-blue-400"
+                                        : "bg-rose-50 border-rose-200 text-rose-600 hover:bg-rose-100 dark:bg-rose-950/40 dark:border-rose-900/40 dark:text-rose-400"
+                                )}
+                            >
+                                {speakerOn ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
                             </button>
                         </div>
                     )}
